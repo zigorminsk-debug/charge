@@ -25,6 +25,7 @@ import androidx.appcompat.app.AppCompatActivity
 import by.charge.overlay.data.ChargerStatus
 import by.charge.overlay.data.Geocoder
 import by.charge.overlay.data.Networks
+import by.charge.overlay.data.OcmAuth
 import by.charge.overlay.data.Place
 import by.charge.overlay.data.Station
 import by.charge.overlay.data.StationRepository
@@ -158,6 +159,16 @@ class MainActivity : AppCompatActivity() {
     private var spokenStepIndex = -1
     private var tts: TextToSpeech? = null
 
+    // Результат входа в OCM: если ключ сохранён, перезагружаем станции
+    private val ocmLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == RESULT_OK) {
+            lastLoadCenter = null
+            scheduleLoad()
+        }
+    }
+
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { onPermissionResult() }
@@ -204,7 +215,7 @@ class MainActivity : AppCompatActivity() {
         rangeInput = findViewById(R.id.range_km)
         planResult = findViewById(R.id.plan_result)
         btnPlanStart = findViewById(R.id.btn_plan_start)
-        repo = StationRepository(Networks.load(this)) { prefs.getString(KEY_OCM, null) }
+        repo = StationRepository(Networks.load(this)) { prefs.getString(OcmAuth.PREF_KEY, null) }
 
         tts = TextToSpeech(this) { status ->
             if (status == TextToSpeech.SUCCESS) tts?.setLanguage(Locale("ru", "RU"))
@@ -604,10 +615,61 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showSettings() {
+        val hasKey = !prefs.getString(OcmAuth.PREF_KEY, null).isNullOrBlank()
+        val builder = AlertDialog.Builder(this)
+            .setTitle(R.string.settings_title)
+            .setMessage(if (hasKey) R.string.settings_key_set else R.string.settings_key_missing)
+            .setPositiveButton(R.string.settings_login) { _, _ -> showLoginDialog() }
+            .setNeutralButton(R.string.settings_manual) { _, _ -> showManualKeyDialog() }
+        if (hasKey) {
+            builder.setNegativeButton(R.string.settings_remove) { _, _ ->
+                prefs.edit().remove(OcmAuth.PREF_KEY).apply()
+                lastLoadCenter = null
+                scheduleLoad()
+                toast(R.string.settings_removed)
+            }
+        }
+        builder.show()
+    }
+
+    /** E-mail и пароль вводятся здесь и сразу передаются в окно входа OCM. Приложение их не сохраняет. */
+    private fun showLoginDialog() {
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(8), dp(20), 0)
+        }
+        val emailInput = EditText(this).apply {
+            hint = getString(R.string.ocm_email)
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS
+        }
+        val passInput = EditText(this).apply {
+            hint = getString(R.string.ocm_password)
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+        }
+        container.addView(emailInput)
+        container.addView(passInput)
+        AlertDialog.Builder(this)
+            .setTitle(R.string.ocm_login_title)
+            .setMessage(R.string.ocm_login_hint)
+            .setView(container)
+            .setPositiveButton(R.string.ocm_login_go) { _, _ ->
+                val email = emailInput.text.toString().trim()
+                val password = passInput.text.toString()
+                if (email.isEmpty() || password.isEmpty()) {
+                    toast(R.string.ocm_login_empty)
+                    return@setPositiveButton
+                }
+                ocmLauncher.launch(OcmLoginActivity.intent(this, email, password))
+            }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
+    }
+
+    private fun showManualKeyDialog() {
         val input = EditText(this).apply {
             hint = getString(R.string.settings_ocm_key)
             inputType = InputType.TYPE_CLASS_TEXT
-            setText(prefs.getString(KEY_OCM, "") ?: "")
+            setText(prefs.getString(OcmAuth.PREF_KEY, "") ?: "")
         }
         AlertDialog.Builder(this)
             .setTitle(R.string.settings_title)
@@ -615,7 +677,7 @@ class MainActivity : AppCompatActivity() {
             .setView(input)
             .setPositiveButton(R.string.settings_save) { _, _ ->
                 val key = input.text.toString().trim()
-                prefs.edit().putString(KEY_OCM, key.ifEmpty { null }).apply()
+                prefs.edit().putString(OcmAuth.PREF_KEY, key.ifEmpty { null }).apply()
                 // Сбрасываем кэш, чтобы станции перезагрузились с учётом ключа
                 lastLoadCenter = null
                 scheduleLoad()
@@ -1115,6 +1177,5 @@ class MainActivity : AppCompatActivity() {
         private const val DEFAULT_RANGE_KM = 300
         private const val MIN_RANGE_KM = 100
         private const val MAX_RANGE_KM = 1000
-        private const val KEY_OCM = "ocm_api_key"
     }
 }
