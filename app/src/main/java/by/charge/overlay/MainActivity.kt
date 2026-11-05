@@ -9,22 +9,31 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.speech.tts.TextToSpeech
+import android.text.InputType
 import android.view.View
 import android.view.WindowManager
 import android.widget.Button
+import android.widget.EditText
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import by.charge.overlay.data.ChargerStatus
+import by.charge.overlay.data.Geocoder
 import by.charge.overlay.data.Networks
+import by.charge.overlay.data.Place
 import by.charge.overlay.data.Station
 import by.charge.overlay.data.StationRepository
+import by.charge.overlay.geo.Box
 import by.charge.overlay.geo.Geo
 import by.charge.overlay.location.LocationTracker
 import by.charge.overlay.nav.Instructions
 import by.charge.overlay.nav.LatLon
 import by.charge.overlay.nav.NavigatorLauncher
 import by.charge.overlay.nav.Route
+import by.charge.overlay.nav.RouteGeometry
+import by.charge.overlay.nav.RoutePlanner
 import by.charge.overlay.nav.RouteProgress
 import by.charge.overlay.nav.Routing
 import by.charge.overlay.util.Permissions
@@ -38,12 +47,14 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.osmdroid.config.Configuration
 import org.osmdroid.events.MapEventsReceiver
 import org.osmdroid.events.MapListener
 import org.osmdroid.events.ScrollEvent
 import org.osmdroid.events.ZoomEvent
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
+import org.osmdroid.util.BoundingBox
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.CustomZoomButtonsController
 import org.osmdroid.views.MapView
@@ -54,10 +65,13 @@ import java.io.File
 import java.util.Locale
 
 /**
- * Карта OpenStreetMap со станциями, фильтр по сетям, карточка станции и встроенная навигация:
- * маршрут по OSRM, линия на карте, баннер со следующим манёвром, голосовые подсказки.
+ * Карта OpenStreetMap со станциями: фильтр по сетям, карточка станции со статусом и разъёмами,
+ * планирование маршрута A → B с зарядками по пути (адрес или точка на карте),
+ * встроенная навигация: линия, баннер манёвров, голос, перестроение.
  */
 class MainActivity : AppCompatActivity() {
+
+    private enum class PickTarget { FROM, TO }
 
     private lateinit var map: MapView
     private lateinit var statusText: TextView
@@ -70,7 +84,15 @@ class MainActivity : AppCompatActivity() {
     private lateinit var navBanner: View
     private lateinit var navInstruction: TextView
     private lateinit var navSub: TextView
+    private lateinit var planPanel: View
+    private lateinit var planPickHint: TextView
+    private lateinit var planFrom: TextView
+    private lateinit var planTo: TextView
+    private lateinit var rangeInput: EditText
+    private lateinit var planResult: TextView
+    private lateinit var btnPlanStart: Button
     private lateinit var repo: StationRepository
+    private lateinit var prefs: android.content.SharedPreferences
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val handler = Handler(Looper.getMainLooper())
@@ -83,7 +105,7 @@ class MainActivity : AppCompatActivity() {
     private var myLocation: Location? = null
     private var firstFix = true
 
-    private var lastLoadCenter: GeoPoint? = null
+    private var lastLoadCenter: LatLon? = null
     private var lastLoadMs = 0L
     private var lastLoadOk = true
     private var loadErrors: List<String> = emptyList()
@@ -92,14 +114,28 @@ class MainActivity : AppCompatActivity() {
     private var visibleCount = 0
     private var selectedBrand: String? = null
     private val stationMarkers = mutableListOf<Marker>()
+    private val stopMarkers = mutableListOf<Marker>()
 
     // Карточка: станция (для внешнего Навигатора) или произвольная точка (долгий тап)
     private var cardStation: Station? = null
     private var cardDestination: LatLon? = null
 
+    // Планирование: null у from означает «моё местоположение»
+    private var pickTarget: PickTarget? = null
+    private var planFromPoint: LatLon? = null
+    private var planFromLabel: String? = null
+    private var planToPoint: LatLon? = null
+    private var planToLabel: String? = null
+    private var planJob: Job? = null
+    private var planRoute: Route? = null
+    private var planStops: List<RoutePlanner.Stop> = emptyList()
+    private var planDestination: LatLon? = null
+
     // Встроенная навигация
     private var navigating = false
     private var navDestination: LatLon? = null
+    private var navStops: List<RoutePlanner.Stop> = emptyList()
+    private val announcedStops = HashSet<String>()
     private var routeProgress: RouteProgress? = null
     private var routeLine: Polyline? = null
     private var routeJob: Job? = null
@@ -122,6 +158,7 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
+        prefs = getSharedPreferences("settings", MODE_PRIVATE)
         map = findViewById(R.id.map)
         statusText = findViewById(R.id.status)
         chips = findViewById(R.id.chips)
@@ -133,7 +170,14 @@ class MainActivity : AppCompatActivity() {
         navBanner = findViewById(R.id.nav_banner)
         navInstruction = findViewById(R.id.nav_instruction)
         navSub = findViewById(R.id.nav_sub)
-        repo = StationRepository(Networks.load(this))
+        planPanel = findViewById(R.id.plan_panel)
+        planPickHint = findViewById(R.id.plan_pick_hint)
+        planFrom = findViewById(R.id.plan_from)
+        planTo = findViewById(R.id.plan_to)
+        rangeInput = findViewById(R.id.range_km)
+        planResult = findViewById(R.id.plan_result)
+        btnPlanStart = findViewById(R.id.btn_plan_start)
+        repo = StationRepository(Networks.load(this)) { prefs.getString(KEY_OCM, null) }
 
         tts = TextToSpeech(this) { status ->
             if (status == TextToSpeech.SUCCESS) tts?.setLanguage(Locale("ru", "RU"))
@@ -145,7 +189,7 @@ class MainActivity : AppCompatActivity() {
         map.controller.setZoom(13.0)
         map.controller.setCenter(GeoPoint(MINSK_LAT, MINSK_LON))
 
-        // Тап по пустому месту закрывает карточку, долгий тап ставит точку назначения
+        // Тап по пустому месту закрывает карточку; долгий тап ставит точку «Откуда»/«Куда» или точку назначения
         map.overlays.add(MapEventsOverlay(object : MapEventsReceiver {
             override fun singleTapConfirmedHelper(p: GeoPoint?): Boolean {
                 hideCard()
@@ -153,7 +197,7 @@ class MainActivity : AppCompatActivity() {
             }
 
             override fun longPressHelper(p: GeoPoint?): Boolean {
-                if (p != null) showCustomPoint(LatLon(p.latitude, p.longitude))
+                if (p != null) onMapLongPress(LatLon(p.latitude, p.longitude))
                 return true
             }
         }))
@@ -196,6 +240,36 @@ class MainActivity : AppCompatActivity() {
         findViewById<Button>(R.id.btn_close).setOnClickListener { hideCard() }
         findViewById<Button>(R.id.btn_nav_stop).setOnClickListener { stopNavigation() }
 
+        // Планирование
+        findViewById<Button>(R.id.btn_plan_open).setOnClickListener { showPlanPanel() }
+        findViewById<Button>(R.id.btn_plan_close).setOnClickListener { hidePlanPanel() }
+        findViewById<Button>(R.id.btn_from_me).setOnClickListener {
+            planFromPoint = null
+            planFromLabel = null
+            updatePlanLabels()
+        }
+        findViewById<Button>(R.id.btn_from_addr).setOnClickListener {
+            askAddress { place ->
+                planFromPoint = LatLon(place.lat, place.lon)
+                planFromLabel = place.name
+                updatePlanLabels()
+            }
+        }
+        findViewById<Button>(R.id.btn_from_map).setOnClickListener { startPick(PickTarget.FROM) }
+        findViewById<Button>(R.id.btn_to_addr).setOnClickListener {
+            askAddress { place ->
+                planToPoint = LatLon(place.lat, place.lon)
+                planToLabel = place.name
+                updatePlanLabels()
+            }
+        }
+        findViewById<Button>(R.id.btn_to_map).setOnClickListener { startPick(PickTarget.TO) }
+        findViewById<Button>(R.id.btn_build).setOnClickListener { buildPlan() }
+        btnPlanStart.setOnClickListener { startPlannedNavigation() }
+        findViewById<Button>(R.id.btn_plan_clear).setOnClickListener { clearPlan() }
+        findViewById<Button>(R.id.btn_settings).setOnClickListener { showSettings() }
+        updatePlanLabels()
+
         statusText.text = getString(R.string.loading)
         if (Permissions.hasLocation(this)) {
             startTracking()
@@ -222,6 +296,7 @@ class MainActivity : AppCompatActivity() {
         tracker?.stop()
         tracker = null
         routeJob?.cancel()
+        planJob?.cancel()
         scope.cancel()
         tts?.stop()
         tts?.shutdown()
@@ -249,7 +324,7 @@ class MainActivity : AppCompatActivity() {
         var marker = meMarker
         if (marker == null) {
             marker = Marker(map)
-            marker.icon = dot(Color.rgb(64, 160, 255))
+            marker.icon = dot(Color.rgb(64, 160, 255), Color.WHITE)
             marker.setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
             map.overlays.add(marker)
             meMarker = marker
@@ -277,11 +352,11 @@ class MainActivity : AppCompatActivity() {
 
     private fun loadStations() {
         val c = map.mapCenter
-        val center = GeoPoint(c.latitude, c.longitude)
+        val center = LatLon(c.latitude, c.longitude)
         val last = lastLoadCenter
         val now = SystemClock.elapsedRealtime()
         val moved = if (last == null) Double.MAX_VALUE
-        else Geo.distanceM(last.latitude, last.longitude, center.latitude, center.longitude)
+        else Geo.distanceM(last.lat, last.lon, center.lat, center.lon)
         // После успеха не грузим повторно, пока центр почти не сдвинулся и данные свежие.
         // После ошибки ждём короче, чтобы не долбить сервер при каждом движении карты.
         val maxAge = if (lastLoadOk) RELOAD_AGE_MS else RETRY_AFTER_ERROR_MS
@@ -292,7 +367,7 @@ class MainActivity : AppCompatActivity() {
         loadJob?.cancel()
         statusText.text = getString(R.string.loading)
         loadJob = scope.launch {
-            val result = repo.load(center.latitude, center.longitude, SEARCH_RADIUS_KM)
+            val result = repo.load(Box.around(center.lat, center.lon, SEARCH_RADIUS_KM))
             lastLoadOk = result.errors.isEmpty()
             loadErrors = result.errors
             // При ошибке оставляем уже загруженные станции, а не очищаем карту
@@ -337,7 +412,9 @@ class MainActivity : AppCompatActivity() {
         for (s in visible) {
             val m = Marker(map)
             m.position = GeoPoint(s.lat, s.lon)
-            m.icon = dot(colorOf(s.brandColor))
+            // Красная обводка — станция не работает по данным источника
+            val ring = if (s.status == ChargerStatus.BROKEN) Color.RED else Color.WHITE
+            m.icon = dot(colorOf(s.brandColor), ring)
             m.setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
             m.setOnMarkerClickListener { _, _ ->
                 showCard(s)
@@ -352,7 +429,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun updateStatusText() {
-        if (navigating) return
+        if (navigating || planPanel.visibility == View.VISIBLE) return
         val base = getString(R.string.status_count, visibleCount)
         statusText.text = if (loadErrors.isEmpty()) {
             base
@@ -367,16 +444,21 @@ class MainActivity : AppCompatActivity() {
         cardStation = s
         cardDestination = LatLon(s.lat, s.lon)
         cardTitle.text = s.title
-        val details = buildList {
-            add(s.brandName)
-            myLocation?.let { loc ->
-                add(Instructions.distance(Geo.distanceM(loc.latitude, loc.longitude, s.lat, s.lon)))
-            }
-            s.maxKw?.let { add("${it.toInt()} кВт") }
-            if (s.connectors.isNotEmpty()) add(s.connectors.joinToString(", "))
-            s.operator?.takeIf { it != s.brandName }?.let { add(it) }
+        val lines = ArrayList<String>()
+        val header = listOfNotNull(s.brandName, s.operator?.takeIf { it != s.brandName }).joinToString(" · ")
+        lines.add(header)
+        myLocation?.let { loc ->
+            lines.add(Instructions.distance(Geo.distanceM(loc.latitude, loc.longitude, s.lat, s.lon)))
         }
-        cardDetails.text = details.joinToString(" · ")
+        lines.add(getString(R.string.card_status, s.status.label))
+        s.maxKw?.let { lines.add(getString(R.string.card_max_kw, it.toInt())) }
+        if (s.outlets.isEmpty()) {
+            lines.add(getString(R.string.card_no_outlets))
+        } else {
+            lines.add(getString(R.string.card_outlets))
+            s.outlets.forEach { lines.add("• ${it.describe()}") }
+        }
+        cardDetails.text = lines.joinToString("\n")
         btnRouteExternal.visibility = View.VISIBLE
         card.visibility = View.VISIBLE
         map.controller.animateTo(GeoPoint(s.lat, s.lon))
@@ -386,7 +468,7 @@ class MainActivity : AppCompatActivity() {
         cardStation = null
         cardDestination = p
         cardTitle.text = getString(R.string.custom_point)
-        cardDetails.text = String.format(Locale.US, "%.5f, %.5f", p.lat, p.lon)
+        cardDetails.text = coords(p)
         btnRouteExternal.visibility = View.GONE
         card.visibility = View.VISIBLE
     }
@@ -395,6 +477,282 @@ class MainActivity : AppCompatActivity() {
         cardStation = null
         cardDestination = null
         card.visibility = View.GONE
+    }
+
+    // ---------- Планирование маршрута ----------
+
+    private fun showPlanPanel() {
+        hideCard()
+        planPanel.visibility = View.VISIBLE
+        fabMe.visibility = View.GONE
+        updatePlanLabels()
+    }
+
+    private fun hidePlanPanel() {
+        pickTarget = null
+        planPickHint.visibility = View.GONE
+        planPanel.visibility = View.GONE
+        fabMe.visibility = View.VISIBLE
+        updateStatusText()
+    }
+
+    /** Долгий тап на карте: режим выбора точки маршрута, либо карточка точки назначения. */
+    private fun onMapLongPress(p: LatLon) {
+        val target = pickTarget
+        if (target == null) {
+            showCustomPoint(p)
+            return
+        }
+        pickTarget = null
+        val label = getString(R.string.plan_point_label, coords(p))
+        if (target == PickTarget.FROM) {
+            planFromPoint = p
+            planFromLabel = label
+        } else {
+            planToPoint = p
+            planToLabel = label
+        }
+        planPickHint.visibility = View.GONE
+        planPanel.visibility = View.VISIBLE
+        updatePlanLabels()
+    }
+
+    private fun startPick(target: PickTarget) {
+        pickTarget = target
+        planPanel.visibility = View.GONE
+        planPickHint.text = getString(
+            if (target == PickTarget.FROM) R.string.plan_pick_from else R.string.plan_pick_to
+        )
+        planPickHint.visibility = View.VISIBLE
+        // Кнопка «Отмена» в подсказке: повторный тап по «Маршрут» возвращает панель
+        planPickHint.setOnClickListener {
+            pickTarget = null
+            planPickHint.visibility = View.GONE
+            planPanel.visibility = View.VISIBLE
+        }
+    }
+
+    private fun updatePlanLabels() {
+        val fromText = planFromLabel ?: getString(R.string.plan_from_me_label)
+        planFrom.text = getString(R.string.plan_from_label, fromText)
+        val toText = planToLabel ?: getString(R.string.plan_not_set)
+        planTo.text = getString(R.string.plan_to_label, toText)
+    }
+
+    private fun askAddress(onPicked: (Place) -> Unit) {
+        val input = EditText(this).apply {
+            hint = getString(R.string.addr_hint)
+            inputType = InputType.TYPE_CLASS_TEXT
+        }
+        AlertDialog.Builder(this)
+            .setTitle(R.string.addr_title)
+            .setView(input)
+            .setPositiveButton(R.string.addr_search) { _, _ ->
+                val query = input.text.toString().trim()
+                if (query.isEmpty()) return@setPositiveButton
+                scope.launch {
+                    val places = try {
+                        withContext(Dispatchers.IO) { Geocoder.search(query) }
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        toast(e.message ?: e.javaClass.simpleName)
+                        return@launch
+                    }
+                    if (places.isEmpty()) {
+                        toast(R.string.addr_not_found)
+                        return@launch
+                    }
+                    AlertDialog.Builder(this@MainActivity)
+                        .setTitle(R.string.addr_pick)
+                        .setItems(places.map { it.name }.toTypedArray()) { _, which -> onPicked(places[which]) }
+                        .setNegativeButton(R.string.cancel, null)
+                        .show()
+                }
+            }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
+    }
+
+    private fun showSettings() {
+        val input = EditText(this).apply {
+            hint = getString(R.string.settings_ocm_key)
+            inputType = InputType.TYPE_CLASS_TEXT
+            setText(prefs.getString(KEY_OCM, "") ?: "")
+        }
+        AlertDialog.Builder(this)
+            .setTitle(R.string.settings_title)
+            .setMessage(R.string.settings_ocm_hint)
+            .setView(input)
+            .setPositiveButton(R.string.settings_save) { _, _ ->
+                val key = input.text.toString().trim()
+                prefs.edit().putString(KEY_OCM, key.ifEmpty { null }).apply()
+                // Сбрасываем кэш, чтобы станции перезагрузились с учётом ключа
+                lastLoadCenter = null
+                scheduleLoad()
+                toast(R.string.settings_saved)
+            }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
+    }
+
+    private fun rangeKm(): Int =
+        rangeInput.text.toString().toIntOrNull()?.coerceIn(MIN_RANGE_KM, MAX_RANGE_KM) ?: DEFAULT_RANGE_KM
+
+    private fun buildPlan() {
+        val to = planToPoint ?: run {
+            toast(R.string.plan_need_to)
+            return
+        }
+        val from = planFromPoint ?: myLocation?.let { LatLon(it.latitude, it.longitude) } ?: run {
+            toast(R.string.plan_need_from)
+            return
+        }
+        val rangeKm = rangeKm()
+        rangeInput.setText(rangeKm.toString())
+
+        planJob?.cancel()
+        clearPlanPreview()
+        btnPlanStart.visibility = View.GONE
+        planResult.text = getString(R.string.plan_route_loading)
+        planJob = scope.launch {
+            try {
+                val base = Routing.fetch(listOf(from, to))
+
+                planResult.text = getString(R.string.plan_stations_loading)
+                val loaded = repo.load(Box.of(base.geometry).padded(STATION_PAD_KM))
+
+                var stopWarning: String? = null
+                val picked = try {
+                    RoutePlanner.pickStops(
+                        RouteGeometry(base.geometry), loaded.stations,
+                        rangeKm * 1000.0, RESERVE_M,
+                    )
+                } catch (e: RoutePlanner.NoStationException) {
+                    stopWarning = e.message
+                    emptyList()
+                }
+
+                // Перестраиваем маршрут через выбранные зарядки, чтобы линия реально проходила через них
+                val route = if (picked.isEmpty()) {
+                    base
+                } else {
+                    val points = listOf(from) +
+                        picked.map { LatLon(it.station.lat, it.station.lon) } + to
+                    Routing.fetch(points)
+                }
+                val stops = RoutePlanner.attach(RouteGeometry(route.geometry), picked.map { it.station })
+
+                planRoute = route
+                planStops = stops
+                planDestination = to
+                drawRoute(route.geometry)
+                drawStops(stops)
+                val bounds = Box.of(route.geometry)
+                map.zoomToBoundingBox(
+                    BoundingBox(bounds.maxLat, bounds.maxLon, bounds.minLat, bounds.minLon),
+                    true, 80,
+                )
+                showPlanResult(route, stops, stopWarning, loaded.errors, rangeKm)
+                btnPlanStart.visibility = View.VISIBLE
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                planResult.text = getString(R.string.plan_failed, e.message ?: e.javaClass.simpleName)
+            }
+        }
+    }
+
+    private fun showPlanResult(
+        route: Route,
+        stops: List<RoutePlanner.Stop>,
+        stopWarning: String?,
+        stationErrors: List<String>,
+        rangeKm: Int,
+    ) {
+        val lines = ArrayList<String>()
+        lines.add(
+            getString(
+                R.string.plan_summary,
+                Instructions.distance(route.distanceM),
+                Instructions.duration(route.durationS),
+            )
+        )
+        if (stops.isEmpty()) {
+            lines.add(getString(R.string.plan_no_stops))
+        } else {
+            lines.add(getString(R.string.plan_stops_count, stops.size))
+            stops.forEachIndexed { i, st ->
+                lines.add(
+                    getString(
+                        R.string.plan_stop_line,
+                        i + 1,
+                        st.station.title,
+                        Instructions.distance(st.alongM),
+                    )
+                )
+                lines.add("    " + st.station.status.label + " · " +
+                    st.station.outlets.joinToString("; ") { it.describe() }
+                        .ifEmpty { getString(R.string.plan_no_outlets) })
+            }
+        }
+        stopWarning?.let { lines.add(getString(R.string.plan_warning, it)) }
+        if (stationErrors.isNotEmpty()) {
+            lines.add(getString(R.string.plan_station_errors, stationErrors.joinToString("; ")))
+        }
+        planResult.text = lines.joinToString("\n")
+    }
+
+    private fun startPlannedNavigation() {
+        val route = planRoute ?: return
+        val to = planDestination ?: return
+        hidePlanPanel()
+        applyRoute(route, to, planStops)
+    }
+
+    private fun clearPlan() {
+        planJob?.cancel()
+        planJob = null
+        planRoute = null
+        planStops = emptyList()
+        planDestination = null
+        planFromPoint = null
+        planFromLabel = null
+        planToPoint = null
+        planToLabel = null
+        btnPlanStart.visibility = View.GONE
+        planResult.text = ""
+        clearPlanPreview()
+        updatePlanLabels()
+    }
+
+    private fun clearPlanPreview() {
+        if (!navigating) {
+            routeLine?.let { map.overlays.remove(it) }
+            routeLine = null
+        }
+        map.overlays.removeAll(stopMarkers)
+        stopMarkers.clear()
+        map.invalidate()
+    }
+
+    private fun drawStops(stops: List<RoutePlanner.Stop>) {
+        map.overlays.removeAll(stopMarkers)
+        stopMarkers.clear()
+        for (st in stops) {
+            val m = Marker(map)
+            m.position = GeoPoint(st.station.lat, st.station.lon)
+            m.icon = dot(Color.rgb(255, 193, 7), Color.BLACK)
+            m.setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+            m.title = st.station.title
+            m.setOnMarkerClickListener { _, _ ->
+                showCard(st.station)
+                true
+            }
+            stopMarkers.add(m)
+        }
+        map.overlays.addAll(stopMarkers)
+        map.invalidate()
     }
 
     // ---------- Навигация ----------
@@ -406,31 +764,42 @@ class MainActivity : AppCompatActivity() {
             return
         }
         hideCard()
-        startRoute(LatLon(loc.latitude, loc.longitude), to, reroute = false)
+        startRoute(listOf(LatLon(loc.latitude, loc.longitude), to), to, emptyList(), reroute = false)
     }
 
-    /** Строит маршрут. При перестроении (reroute) старая линия остаётся, пока не придёт новая. */
-    private fun startRoute(from: LatLon, to: LatLon, reroute: Boolean) {
+    /**
+     * Строит маршрут и запускает навигацию. Остановки передаются станциями:
+     * после перестроения пройденные остановки отбрасываются.
+     */
+    private fun startRoute(
+        points: List<LatLon>,
+        to: LatLon,
+        stations: List<Station>,
+        reroute: Boolean,
+    ) {
         routeJob?.cancel()
         if (!reroute) statusText.text = getString(R.string.nav_building)
         routeJob = scope.launch {
             val route = try {
-                Routing.fetch(from, to)
+                Routing.fetch(points)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 if (!reroute) statusText.text = getString(R.string.nav_failed, e.message ?: e.javaClass.simpleName)
                 return@launch
             }
-            applyRoute(route, to)
+            val stops = RoutePlanner.attach(RouteGeometry(route.geometry), stations)
+            applyRoute(route, to, stops)
         }
     }
 
-    private fun applyRoute(route: Route, to: LatLon) {
+    private fun applyRoute(route: Route, to: LatLon, stops: List<RoutePlanner.Stop>) {
         routeProgress = RouteProgress(route)
         navDestination = to
+        navStops = stops
         spokenStepIndex = -1
         drawRoute(route.geometry)
+        drawStops(stops)
         if (!navigating) {
             navigating = true
             navBanner.visibility = View.VISIBLE
@@ -461,8 +830,19 @@ class MainActivity : AppCompatActivity() {
         ) {
             lastRerouteMs = now
             navSub.text = getString(R.string.nav_reroute)
-            startRoute(me, dest, reroute = true)
+            // Пересчёт: от текущей точки через ещё не пройденные зарядки к цели
+            val remaining = navStops.filter { it.alongM > snap.traveledM }
+            val points = listOf(me) + remaining.map { LatLon(it.station.lat, it.station.lon) } + dest
+            startRoute(points, dest, remaining.map { it.station }, reroute = true)
             return
+        }
+
+        // Зарядка по пути: одно предупреждение заранее
+        navStops.forEach { st ->
+            val ahead = st.alongM - snap.traveledM
+            if (ahead in 0.0..STOP_ANNOUNCE_M && announcedStops.add(st.station.id)) {
+                speak(getString(R.string.stop_ahead, st.station.title))
+            }
         }
 
         val next = snap.nextStep
@@ -494,9 +874,13 @@ class MainActivity : AppCompatActivity() {
         routeJob = null
         navigating = false
         navDestination = null
+        navStops = emptyList()
+        announcedStops.clear()
         routeProgress = null
         routeLine?.let { map.overlays.remove(it) }
         routeLine = null
+        map.overlays.removeAll(stopMarkers)
+        stopMarkers.clear()
         navBanner.visibility = View.GONE
         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         tts?.stop()
@@ -514,6 +898,7 @@ class MainActivity : AppCompatActivity() {
         // Линия ниже маркеров: индекс 0 занят событиями карты
         map.overlays.add(1, line)
         routeLine = line
+        map.invalidate()
     }
 
     private fun speak(text: String) {
@@ -522,10 +907,10 @@ class MainActivity : AppCompatActivity() {
 
     // ---------- Утилиты ----------
 
-    private fun dot(color: Int): GradientDrawable = GradientDrawable().apply {
+    private fun dot(color: Int, ring: Int): GradientDrawable = GradientDrawable().apply {
         setShape(GradientDrawable.OVAL)
         setColor(color)
-        setStroke(dp(2), Color.WHITE)
+        setStroke(dp(2), ring)
         setSize(dp(18), dp(18))
     }
 
@@ -536,10 +921,16 @@ class MainActivity : AppCompatActivity() {
             Color.GRAY
         }
 
+    private fun coords(p: LatLon): String = String.format(Locale.US, "%.5f, %.5f", p.lat, p.lon)
+
     private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
 
     private fun toast(resId: Int) {
         Toast.makeText(this, resId, Toast.LENGTH_SHORT).show()
+    }
+
+    private fun toast(text: String) {
+        Toast.makeText(this, text, Toast.LENGTH_SHORT).show()
     }
 
     companion object {
@@ -553,6 +944,15 @@ class MainActivity : AppCompatActivity() {
         private const val RETRY_AFTER_ERROR_MS = 30 * 1000L
         private const val REROUTE_MIN_INTERVAL_MS = 15 * 1000L
         private const val ANNOUNCE_M = 300.0
+        private const val STOP_ANNOUNCE_M = 2000.0
         private const val ARRIVED = Int.MAX_VALUE
+
+        // Планирование
+        private const val STATION_PAD_KM = 5.0
+        private const val RESERVE_M = 50_000.0
+        private const val DEFAULT_RANGE_KM = 300
+        private const val MIN_RANGE_KM = 100
+        private const val MAX_RANGE_KM = 1000
+        private const val KEY_OCM = "ocm_api_key"
     }
 }

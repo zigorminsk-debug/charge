@@ -1,5 +1,6 @@
 package by.charge.overlay.data
 
+import by.charge.overlay.geo.Box
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import org.json.JSONArray
@@ -7,7 +8,8 @@ import org.json.JSONObject
 
 /**
  * Источник 1: OpenStreetMap через Overpass API.
- * Координаты берутся только из OSM, ничего не выдумывается.
+ * Координаты и разъёмы берутся только из OSM, ничего не выдумывается.
+ * Статусы в OSM редко заполнены, поэтому чаще всего они UNKNOWN.
  */
 object OverpassSource {
     /** Публичные зеркала Overpass. Запросы идут параллельно, побеждает первый успешный ответ. */
@@ -17,13 +19,30 @@ object OverpassSource {
         "https://overpass.openstreetmap.fr/api/interpreter",
         "https://overpass.openstreetmap.ru/api/interpreter",
     )
+
     private const val SOURCE = "osm"
 
-    fun query(lat: Double, lon: Double, radiusM: Int): String =
-        "[out:json][timeout:25];(" +
-            "node[\"amenity\"=\"charging_station\"](around:$radiusM,$lat,$lon);" +
-            "way[\"amenity\"=\"charging_station\"](around:$radiusM,$lat,$lon);" +
+    /** Человекочитаемые имена типов разъёмов из тегов socket:*. */
+    private val SOCKET_NAMES = mapOf(
+        "type1" to "Type 1",
+        "type1_combo" to "CCS1",
+        "type2" to "Type 2",
+        "type2_combo" to "CCS2",
+        "type2_socket" to "Type 2 розетка",
+        "type2_cable" to "Type 2 кабель",
+        "chademo" to "CHAdeMO",
+        "tesla_supercharger" to "Tesla",
+        "tesla_destination" to "Tesla (дест.)",
+        "schuko" to "Schuko",
+    )
+
+    fun query(box: Box): String {
+        val bbox = "(${box.minLat},${box.minLon},${box.maxLat},${box.maxLon})"
+        return "[out:json][timeout:25];(" +
+            "node[\"amenity\"=\"charging_station\"]$bbox;" +
+            "way[\"amenity\"=\"charging_station\"]$bbox;" +
             ");out center tags;"
+    }
 
     fun parse(json: String, networks: Networks): List<Station> {
         val elements = JSONObject(json).optJSONArray("elements") ?: return emptyList()
@@ -46,21 +65,38 @@ object OverpassSource {
 
             var maxKw: Double? = parseKw(tags.optString("maxpower"))
                 ?: parseKw(tags.optString("charging_station:output"))
-            val connectors = ArrayList<String>()
+
+            // socket:<тип>=<кол-во> и socket:<тип>:output=<кВт>
+            val counts = LinkedHashMap<String, Int>()
+            val powers = HashMap<String, Double>()
             val keys = tags.keys()
             while (keys.hasNext()) {
                 val key = keys.next()
                 if (!key.startsWith("socket:")) continue
+                val rest = key.removePrefix("socket:")
                 val value = tags.optString(key)
-                if (key.endsWith(":output")) {
-                    val kw = parseKw(value)
-                    if (kw != null && (maxKw == null || kw > maxKw)) maxKw = kw
-                } else if (key.count { it == ':' } == 1) {
-                    // "socket:type2_combo=2" -> количество разъёмов этого типа
-                    val count = value.toIntOrNull() ?: 1
-                    val type = key.removePrefix("socket:")
-                    connectors.add(if (count > 1) "$type ×$count" else type)
+                if (rest.endsWith(":output")) {
+                    val type = rest.removeSuffix(":output")
+                    val kw = parseKw(value) ?: continue
+                    powers[type] = kw
+                    if (maxKw == null || kw > maxKw) maxKw = kw
+                } else if (!rest.contains(':')) {
+                    counts[rest] = value.toIntOrNull() ?: 1
                 }
+            }
+            val outlets = (counts.keys + powers.keys).distinct().map { type ->
+                Outlet(
+                    type = SOCKET_NAMES[type] ?: type,
+                    kw = powers[type],
+                    count = counts[type] ?: 1,
+                    status = ChargerStatus.UNKNOWN,
+                )
+            }
+
+            val status = when (tags.optString("operational_status")) {
+                "operational" -> ChargerStatus.OPERATIONAL
+                "broken", "out_of_order" -> ChargerStatus.BROKEN
+                else -> if (tags.optString("disused") == "yes") ChargerStatus.DISUSED else ChargerStatus.UNKNOWN
             }
 
             val label = networks.labelFor(brand, operator)
@@ -75,7 +111,8 @@ object OverpassSource {
                     brandName = label,
                     brandColor = brand.color,
                     maxKw = maxKw,
-                    connectors = connectors,
+                    outlets = outlets,
+                    status = status,
                     source = SOURCE,
                 )
             )
@@ -85,24 +122,41 @@ object OverpassSource {
 }
 
 /**
- * Источник 2: Open Charge Map (API v3, без ключа для небольшого объёма запросов).
- * compact=false, чтобы получить AddressInfo, OperatorInfo и Connections.
+ * Источник 2: Open Charge Map (API v3). Нужен API-ключ: без него сервис отвечает 403.
+ * Ключ вводится в приложении (Настройки) и хранится только на устройстве.
+ * Даёт статусы станций и разъёмов, поэтому это основной источник статусов.
  */
 object OpenChargeMapSource {
     const val ENDPOINT = "https://api.openchargemap.io/v3/poi/"
     private const val SOURCE = "ocm"
 
-    fun url(lat: Double, lon: Double, radiusKm: Double): HttpUrl =
+    fun url(lat: Double, lon: Double, radiusKm: Double, apiKey: String): HttpUrl =
         ENDPOINT.toHttpUrl().newBuilder()
             .addQueryParameter("output", "json")
             .addQueryParameter("latitude", lat.toString())
             .addQueryParameter("longitude", lon.toString())
             .addQueryParameter("distance", radiusKm.toString())
             .addQueryParameter("distanceunit", "KM")
-            .addQueryParameter("maxresults", "300")
+            .addQueryParameter("maxresults", "500")
             .addQueryParameter("compact", "false")
             .addQueryParameter("verbose", "false")
+            .addQueryParameter("key", apiKey)
             .build()
+
+    /** Статус из объекта StatusType (IsOperational или Title). null — данных нет. */
+    internal fun statusOf(obj: JSONObject?): ChargerStatus? {
+        if (obj == null) return null
+        val title = obj.optString("Title")
+        if (title.contains("Removed", ignoreCase = true)) return ChargerStatus.DISUSED
+        if (!obj.isNull("IsOperational")) {
+            return if (obj.optBoolean("IsOperational")) ChargerStatus.OPERATIONAL else ChargerStatus.BROKEN
+        }
+        return when {
+            title.contains("Not Operational", ignoreCase = true) -> ChargerStatus.BROKEN
+            title.contains("Operational", ignoreCase = true) -> ChargerStatus.OPERATIONAL
+            else -> null
+        }
+    }
 
     fun parse(json: String, networks: Networks): List<Station> {
         val arr = JSONArray(json)
@@ -120,7 +174,7 @@ object OpenChargeMapSource {
             val label = networks.labelFor(brand, operator)
 
             var maxKw: Double? = null
-            val connectors = ArrayList<String>()
+            val outlets = ArrayList<Outlet>()
             val conns = p.optJSONArray("Connections")
             if (conns != null) {
                 for (j in 0 until conns.length()) {
@@ -128,11 +182,21 @@ object OpenChargeMapSource {
                     val kw = c.optDouble("PowerKW", Double.NaN).takeUnless { it.isNaN() }
                     if (kw != null && (maxKw == null || kw > maxKw)) maxKw = kw
                     val type = c.optJSONObject("ConnectionType")?.optString("Title")?.trim()?.ifEmpty { null } ?: "?"
-                    val qty = c.optInt("Quantity", 1).coerceAtLeast(1)
-                    val kwPart = if (kw != null) " ${kw.toInt()} кВт" else ""
-                    val qtyPart = if (qty > 1) " ×$qty" else ""
-                    connectors.add("$type$kwPart$qtyPart")
+                    outlets.add(
+                        Outlet(
+                            type = type,
+                            kw = kw,
+                            count = c.optInt("Quantity", 1).coerceAtLeast(1),
+                            status = statusOf(c.optJSONObject("StatusType")) ?: ChargerStatus.UNKNOWN,
+                        )
+                    )
                 }
+            }
+
+            val status = statusOf(p.optJSONObject("StatusType")) ?: when {
+                outlets.isNotEmpty() && outlets.all { it.status == ChargerStatus.OPERATIONAL } -> ChargerStatus.OPERATIONAL
+                outlets.isNotEmpty() && outlets.all { it.status == ChargerStatus.BROKEN } -> ChargerStatus.BROKEN
+                else -> ChargerStatus.UNKNOWN
             }
 
             out.add(
@@ -146,7 +210,8 @@ object OpenChargeMapSource {
                     brandName = label,
                     brandColor = brand.color,
                     maxKw = maxKw,
-                    connectors = connectors,
+                    outlets = outlets,
+                    status = status,
                     source = SOURCE,
                 )
             )

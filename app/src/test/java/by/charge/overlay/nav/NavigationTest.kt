@@ -93,4 +93,14 @@ class NavigationTest {
         val snap = RouteProgress(route).update(LatLon(0.001, 0.001))
         assertTrue(snap.offRouteM > RouteProgress.OFF_ROUTE_M)
     }
+
+    @Test
+    fun routeUrlContainsAllWaypointsInOrder() {
+        val url = Routing.url(
+            "https://example.com/route/v1/driving/",
+            listOf(LatLon(53.9, 27.5), LatLon(53.95, 27.6), LatLon(54.0, 27.7)),
+        )
+        assertTrue(url.contains("27.5,53.9;27.6,53.95;27.7,54.0"))
+        assertTrue(url.contains("steps=true"))
+    }
 }

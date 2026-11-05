@@ -1,5 +1,29 @@
 package by.charge.overlay.data
 
+/** Статус зарядной станции. Определяется источником; если данных нет — UNKNOWN. */
+enum class ChargerStatus(val label: String) {
+    OPERATIONAL("работает"),
+    BROKEN("не работает"),
+    UNKNOWN("статус неизвестен"),
+    DISUSED("выведена из эксплуатации"),
+}
+
+/** Разъём (тип, мощность, количество, статус). Мощность может быть неизвестна. */
+data class Outlet(
+    val type: String,
+    val kw: Double?,
+    val count: Int,
+    val status: ChargerStatus,
+) {
+    fun describe(): String {
+        val parts = mutableListOf(type)
+        if (kw != null) parts.add("${kw.toInt()} кВт")
+        if (count > 1) parts.add("×$count")
+        parts.add(status.label)
+        return parts.joinToString(" · ")
+    }
+}
+
 /** Зарядная станция в едином формате (одинаковый для OSM и OpenChargeMap). */
 data class Station(
     val id: String,
@@ -11,7 +35,8 @@ data class Station(
     val brandName: String,
     val brandColor: String,
     val maxKw: Double?,
-    val connectors: List<String>,
+    val outlets: List<Outlet>,
+    val status: ChargerStatus,
     val source: String,
 )
 

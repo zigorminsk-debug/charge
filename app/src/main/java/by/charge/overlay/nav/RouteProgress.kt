@@ -17,6 +17,8 @@ class RouteProgress(private val route: Route) {
         val nextStepIndex: Int,
         val distanceToNextM: Double,
         val arrived: Boolean,
+        /** Пройденное расстояние вдоль маршрута, м. Нужно, чтобы понять, какие остановки уже пройдены. */
+        val traveledM: Double,
     )
 
     private val g: List<LatLon> = route.geometry
@@ -48,6 +50,7 @@ class RouteProgress(private val route: Route) {
             nextStepIndex = nextIdx,
             distanceToNextM = if (next != null) dist(me, next.at) else 0.0,
             arrived = dist(me, g[g.size - 1]) < ARRIVE_M,
+            traveledM = cum[idx],
         )
     }
 

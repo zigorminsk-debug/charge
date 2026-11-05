@@ -1,5 +1,6 @@
 package by.charge.overlay.data
 
+import by.charge.overlay.geo.Box
 import by.charge.overlay.geo.Geo
 import by.charge.overlay.net.Http
 import kotlinx.coroutines.CancellationException
@@ -15,18 +16,22 @@ import java.util.Collections
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
- * Загружает станции из OpenStreetMap (основной источник) и, если включён, из Open Charge Map.
+ * Загружает станции из OpenStreetMap (всегда) и из Open Charge Map (если введён API-ключ).
  * Ошибка одного источника не отменяет результат другого, а причина попадает в errors.
+ * Станции со статусом «выведена из эксплуатации» отбрасываются.
  */
-class StationRepository(private val networks: Networks) {
+class StationRepository(
+    private val networks: Networks,
+    private val apiKey: () -> String?,
+) {
 
     data class LoadResult(val stations: List<Station>, val errors: List<String>)
 
-    suspend fun load(lat: Double, lon: Double, radiusKm: Double): LoadResult = withContext(Dispatchers.IO) {
+    suspend fun load(box: Box): LoadResult = withContext(Dispatchers.IO) {
         val errors = ArrayList<String>()
 
         val osm: List<Station> = try {
-            fetchOverpass(lat, lon, (radiusKm * 1000).toInt())
+            fetchOverpass(box)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -34,11 +39,13 @@ class StationRepository(private val networks: Networks) {
             emptyList()
         }
 
-        val ocm: List<Station> = if (!OPEN_CHARGE_MAP_ENABLED) {
+        val key = apiKey()?.trim().orEmpty()
+        val ocm: List<Station> = if (key.isEmpty()) {
             emptyList()
         } else {
             try {
-                OpenChargeMapSource.parse(Http.get(OpenChargeMapSource.url(lat, lon, radiusKm)), networks)
+                val url = OpenChargeMapSource.url(box.centerLat, box.centerLon, box.halfDiagonalKm(), key)
+                OpenChargeMapSource.parse(Http.get(url), networks)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -47,23 +54,35 @@ class StationRepository(private val networks: Networks) {
             }
         }
 
-        // Станция из OCM, совпадающая с OSM в пределах 50 м, считается дублем
+        // Станция из OCM, совпадающая с OSM в пределах 50 м, считается дублем.
+        // Статус берём из OCM, если он там есть: это единственный источник статусов.
         val merged = ArrayList<Station>(osm)
         for (s in ocm) {
-            val duplicate = osm.any { Geo.distanceM(it.lat, it.lon, s.lat, s.lon) < 50.0 }
-            if (!duplicate) merged.add(s)
+            val twin = osm.firstOrNull { Geo.distanceM(it.lat, it.lon, s.lat, s.lon) < 50.0 }
+            if (twin == null) {
+                merged.add(s)
+            } else {
+                val index = merged.indexOf(twin)
+                merged[index] = twin.copy(
+                    outlets = if (twin.outlets.isEmpty()) s.outlets else twin.outlets,
+                    status = if (s.status != ChargerStatus.UNKNOWN) s.status else twin.status,
+                    maxKw = twin.maxKw ?: s.maxKw,
+                )
+            }
         }
-        merged.sortBy { Geo.distanceM(lat, lon, it.lat, it.lon) }
-
-        LoadResult(merged, errors)
+        val visible = merged.filter { it.status != ChargerStatus.DISUSED }
+        LoadResult(
+            visible.sortedBy { Geo.distanceM(box.centerLat, box.centerLon, it.lat, it.lon) },
+            errors,
+        )
     }
 
     /**
      * Опрашивает все зеркала Overpass параллельно и возвращает первый успешный ответ.
      * Если ответили ошибкой все, в исключении перечислены причины по каждому серверу.
      */
-    private suspend fun fetchOverpass(lat: Double, lon: Double, radiusM: Int): List<Station> {
-        val query = OverpassSource.query(lat, lon, radiusM)
+    private suspend fun fetchOverpass(box: Box): List<Station> {
+        val query = OverpassSource.query(box)
         val winner = CompletableDeferred<List<Station>>()
         val errors = Collections.synchronizedList(mutableListOf<String>())
         val pending = AtomicInteger(OverpassSource.ENDPOINTS.size)
@@ -91,9 +110,6 @@ class StationRepository(private val networks: Networks) {
     }
 
     companion object {
-        /** Open Charge Map отвечает 403 без API-ключа, поэтому по умолчанию выключен. */
-        const val OPEN_CHARGE_MAP_ENABLED = false
-
         private val OVERPASS_SCOPE = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     }
 }

@@ -41,8 +41,11 @@ object Routing {
 
     private val ROUTE_SCOPE = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
-    fun url(base: String, from: LatLon, to: LatLon): String =
-        "$base${from.lon},${from.lat};${to.lon},${to.lat}?overview=full&geometries=geojson&steps=true&alternatives=false"
+    /** Адрес запроса: точки по порядку (старт, остановки, финиш) через «;». */
+    fun url(base: String, points: List<LatLon>): String {
+        val coords = points.joinToString(";") { "${it.lon},${it.lat}" }
+        return "$base$coords?overview=full&geometries=geojson&steps=true&alternatives=false"
+    }
 
     /** Разбор ответа OSRM. Возвращает null, если маршрута нет или он пустой. */
     fun parse(json: String): Route? {
@@ -85,8 +88,11 @@ object Routing {
         )
     }
 
-    /** Запрашивает маршрут у всех серверов параллельно; первый успешный ответ побеждает. */
-    suspend fun fetch(from: LatLon, to: LatLon): Route {
+    suspend fun fetch(from: LatLon, to: LatLon): Route = fetch(listOf(from, to))
+
+    /** Запрашивает маршрут через все точки у всех серверов параллельно; первый успешный ответ побеждает. */
+    suspend fun fetch(points: List<LatLon>): Route {
+        require(points.size >= 2) { "нужны минимум две точки" }
         val winner = CompletableDeferred<Route>()
         val errors = Collections.synchronizedList(mutableListOf<String>())
         val pending = AtomicInteger(ENDPOINTS.size)
@@ -95,7 +101,7 @@ object Routing {
             val host = base.substringAfter("://").substringBefore("/")
             ROUTE_SCOPE.launch {
                 try {
-                    val body = Http.get(url(base, from, to).toHttpUrl())
+                    val body = Http.get(url(base, points).toHttpUrl())
                     val route = parse(body) ?: throw IOException("маршрут не найден")
                     winner.complete(route)
                 } catch (e: Exception) {
