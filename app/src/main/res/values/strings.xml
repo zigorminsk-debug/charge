@@ -57,7 +57,7 @@
     <string name="addr_pick">Выберите место</string>
     <string name="cancel">Отмена</string>
     <string name="settings_title">Настройки</string>
-    <string name="settings_ocm_hint">Статусы и разъёмы станций с актуальными данными берутся из Open Charge Map. Нужен бесплатный API-ключ с openchargemap.io. Ключ хранится только на этом устройстве.</string>
+    <string name="settings_ocm_hint">Статусы и разъёмы станций берутся из Open Charge Map, ключ нужен бесплатный. Как получить: откройте openchargemap.org, войдите в аккаунт, затем My Profile → My Apps → Register an Application. Скопируйте ключ и вставьте сюда. Ключ хранится только на этом устройстве.</string>
     <string name="settings_ocm_key">API-ключ Open Charge Map</string>
     <string name="settings_save">Сохранить</string>
     <string name="settings_saved">Сохранено. Станции обновятся.</string>
@@ -69,4 +69,5 @@
     <string name="stop_title">Зарядка по пути</string>
     <string name="strip_finish">Финиш</string>
     <string name="strip_none">Рядом с маршрутом зарядок впереди нет</string>
+    <string name="settings_button">Ключ OCM</string>
 </resources>

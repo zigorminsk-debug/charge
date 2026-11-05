@@ -295,6 +295,7 @@ class MainActivity : AppCompatActivity() {
         btnPlanStart.setOnClickListener { startPlannedNavigation() }
         findViewById<Button>(R.id.btn_plan_clear).setOnClickListener { clearPlan() }
         findViewById<Button>(R.id.btn_settings).setOnClickListener { showSettings() }
+        findViewById<Button>(R.id.btn_settings_top).setOnClickListener { showSettings() }
         updatePlanLabels()
 
         statusText.text = getString(R.string.loading)
