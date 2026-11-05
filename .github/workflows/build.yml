@@ -1,0 +1,102 @@
+name: Build APK
+
+# Сборка запускается автоматически: на каждый push в любую ветку, на pull request,
+# ежедневно по расписанию и вручную (workflow_dispatch).
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 3 * * *'
+
+# Право записи нужно только для создания GitHub Release (это делается только для main).
+permissions:
+  contents: write
+
+# Для одной ветки идёт один прогон: новый push отменяет предыдущий.
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  android:
+    name: Test, sign, package
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Checkout (full history, нужно для versionCode)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      # В репозитории нет gradle-wrapper.jar, поэтому ставим Gradle 8.9 напрямую
+      - name: Set up Gradle 8.9
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      # Юнит-тесты на JVM. Если тест падает, следующие шаги (APK) не выполняются.
+      - name: Unit tests
+        run: |
+          echo "::add-matcher::.github/problem-matchers/gradle.json"
+          gradle --no-daemon test
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports-${{ github.sha }}
+          path: app/build/reports/tests/
+          if-no-files-found: ignore
+
+      - name: Build signed release APK and AAB
+        run: |
+          echo "::add-matcher::.github/problem-matchers/gradle.json"
+          gradle --no-daemon assembleRelease bundleRelease
+
+      # Подпись APK должна совпадать с закоммиченным сертификатом signing/cert-sha256.txt.
+      # Так видно, что релиз подписан нашим ключом, а не случайным.
+      - name: Verify APK signature matches the committed key
+        run: |
+          set -euo pipefail
+          APK=$(ls app/build/outputs/apk/release/*.apk | head -n 1)
+          BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -n 1)
+          "$BT/apksigner" verify --verbose --print-certs "$APK" | tee signer.txt
+          EXPECTED=$(tr -d '[:space:]' < signing/cert-sha256.txt)
+          ACTUAL=$(grep 'certificate SHA-256 digest' signer.txt | head -n 1 | awk '{print $NF}')
+          echo "expected=$EXPECTED actual=$ACTUAL"
+          test "$ACTUAL" = "$EXPECTED"
+
+      # APK и AAB доступны как артефакты прогона на GitHub.
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: charge-hud-${{ github.sha }}
+          path: |
+            app/build/outputs/apk/release/*.apk
+            app/build/outputs/bundle/release/*.aab
+          if-no-files-found: error
+
+      # Релиз создаётся только для main. Тег v<число коммитов>, как и versionCode. Если тег уже есть, шаг ничего не делает.
+      - name: Publish GitHub Release (только main)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="v$(git rev-list --count HEAD)"
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            echo "Release $TAG уже существует"
+          else
+            gh release create "$TAG" app/build/outputs/apk/release/app-release.apk \
+              --title "Charge HUD $TAG" \
+              --notes "Подписанная сборка $TAG (commit ${GITHUB_SHA::7}). Ставится поверх предыдущих версий."
+          fi

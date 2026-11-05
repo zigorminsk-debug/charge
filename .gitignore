@@ -1,0 +1,17 @@
+# Gradle / Android
+.gradle/
+build/
+local.properties
+*.iml
+.idea/
+.DS_Store
+captures/
+.externalNativeBuild/
+.cxx/
+*.apk.idsig
+output-metadata.json
+
+# Секреты, которых здесь быть не должно
+# (ключ подписи намеренно лежит в signing/ — см. README, раздел «Ключ подписи лежит в репозитории»)
+*.keystore.local
+keystore.local.properties

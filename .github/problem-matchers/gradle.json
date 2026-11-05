@@ -1,0 +1,37 @@
+{
+  "problemMatcher": [
+    {
+      "owner": "kotlin-compile-error",
+      "severity": "error",
+      "pattern": [
+        {
+          "regexp": "^e: (?:file://)?(.+?):(\\d+):(\\d+) (.+)$",
+          "file": 1,
+          "line": 2,
+          "column": 3,
+          "message": 4
+        }
+      ]
+    },
+    {
+      "owner": "aapt-error",
+      "severity": "error",
+      "pattern": [
+        {
+          "regexp": "^(?:AAPT: )?error: (.+)$",
+          "message": 1
+        }
+      ]
+    },
+    {
+      "owner": "gradle-task-failed",
+      "severity": "error",
+      "pattern": [
+        {
+          "regexp": "^> Task (\\S+) FAILED$",
+          "message": 1
+        }
+      ]
+    }
+  ]
+}
