@@ -41,15 +41,20 @@ object OcmAuth {
      */
     fun fillScript(email: String, password: String): String = """
         (function () {
-          var e = document.querySelector('input[type=email], input[name*=mail i], input[id*=mail i], input[name*=user i]');
           var p = document.querySelector('input[type=password]');
-          if (!e || !p) return 'nofields';
+          if (!p) return 'nofields';
+          // Работаем только внутри формы входа: в шапке сайта есть ссылки «Sign In», которые не отправляют форму
+          var scope = p.form || document;
+          var e = scope.querySelector('input[type=email], input[name*=mail i], input[id*=mail i], input[name*=user i]');
+          if (!e) return 'nofields';
           e.value = ${JSONObject.quote(email)};
           p.value = ${JSONObject.quote(password)};
           e.dispatchEvent(new Event('input', {bubbles: true}));
           p.dispatchEvent(new Event('input', {bubbles: true}));
-          var items = Array.prototype.slice.call(document.querySelectorAll('button, input[type=submit], a'));
-          var btn = items.find(function (b) { return /sign\s*in|войти/i.test(b.value || b.textContent || ''); });
+          // Только кнопки и submit-элементы, без ссылок
+          var buttons = Array.prototype.slice.call(scope.querySelectorAll('button, input[type=submit]'));
+          var btn = buttons.find(function (b) { return /sign\s*in|log\s*in|войти/i.test(b.value || b.textContent || ''); })
+            || buttons.find(function (b) { return (b.type || '').toLowerCase() === 'submit'; });
           if (btn) { btn.click(); return 'submitted'; }
           if (p.form) { p.form.submit(); return 'submitted'; }
           return 'nosubmit';

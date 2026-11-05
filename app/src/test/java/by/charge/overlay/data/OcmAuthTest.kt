@@ -45,6 +45,15 @@ class OcmAuthTest {
     }
 
     @Test
+    fun fillScriptClicksOnlyFormButtonsNotHeaderLinks() {
+        val js = OcmAuth.fillScript("a@b.c", "x")
+        // Ссылки «Sign In» в шапке не должны быть кандидатами на отправку формы
+        assertFalse(js.contains("'a'"))
+        assertFalse(js.contains("'button, input[type=submit], a'"))
+        assertTrue(js.contains("p.form || document"))
+    }
+
+    @Test
     fun validationUrlCarriesKey() {
         val url = OcmAuth.validationUrl("68bfccab-cb66-449f-9b0c-e4d8422990d1").toString()
         assertTrue(url.startsWith("https://api.openchargemap.io/v3/referencedata/"))
