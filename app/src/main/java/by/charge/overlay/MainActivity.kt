@@ -72,6 +72,7 @@ class MainActivity : AppCompatActivity() {
 
     private var lastLoadCenter: GeoPoint? = null
     private var lastLoadMs = 0L
+    private var lastLoadOk = true
     private var loadErrors: List<String> = emptyList()
 
     private var stations: List<Station> = emptyList()
@@ -226,23 +227,23 @@ class MainActivity : AppCompatActivity() {
         val center = GeoPoint(c.latitude, c.longitude)
         val last = lastLoadCenter
         val now = SystemClock.elapsedRealtime()
-        // Не перезагружаем, если центр почти не сдвинулся и данные свежие
-        if (last != null &&
-            Geo.distanceM(last.latitude, last.longitude, center.latitude, center.longitude) < RELOAD_MOVE_M &&
-            now - lastLoadMs < RELOAD_AGE_MS
-        ) {
-            return
-        }
+        val moved = if (last == null) Double.MAX_VALUE
+        else Geo.distanceM(last.latitude, last.longitude, center.latitude, center.longitude)
+        // После успеха не грузим повторно, пока центр почти не сдвинулся и данные свежие.
+        // После ошибки ждём короче, чтобы не долбить сервер при каждом движении карты.
+        val maxAge = if (lastLoadOk) RELOAD_AGE_MS else RETRY_AFTER_ERROR_MS
+        if (moved < RELOAD_MOVE_M && now - lastLoadMs < maxAge) return
+
         lastLoadCenter = center
         lastLoadMs = now
         loadJob?.cancel()
         statusText.text = getString(R.string.loading)
         loadJob = scope.launch {
             val result = repo.load(center.latitude, center.longitude, SEARCH_RADIUS_KM)
-            stations = result.stations
+            lastLoadOk = result.errors.isEmpty()
             loadErrors = result.errors
-            // При ошибке разрешаем повтор при следующем движении карты
-            if (result.errors.isNotEmpty()) lastLoadCenter = null
+            // При ошибке оставляем уже загруженные станции, а не очищаем карту
+            if (lastLoadOk || result.stations.isNotEmpty()) stations = result.stations
             rebuildChips()
             applyFilter()
         }
@@ -351,9 +352,10 @@ class MainActivity : AppCompatActivity() {
         // Центр Минска — стартовая точка, пока нет GPS
         private const val MINSK_LAT = 53.9045
         private const val MINSK_LON = 27.5615
-        private const val SEARCH_RADIUS_KM = 15.0
+        private const val SEARCH_RADIUS_KM = 5.0
         private const val RELOAD_DELAY_MS = 700L
         private const val RELOAD_MOVE_M = 1500.0
         private const val RELOAD_AGE_MS = 10 * 60 * 1000L
+        private const val RETRY_AFTER_ERROR_MS = 30 * 1000L
     }
 }
