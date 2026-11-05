@@ -4,6 +4,8 @@ import android.content.Intent
 import android.os.Bundle
 import android.webkit.CookieManager
 import android.webkit.JavascriptInterface
+import android.webkit.WebResourceError
+import android.webkit.WebResourceRequest
 import android.webkit.WebStorage
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -40,7 +42,9 @@ class OcmLoginActivity : AppCompatActivity() {
     private var email: String? = null
     private var password: String? = null
     private var stage = Stage.LOGIN
-    private var autofillDone = false
+    private var autofillAttempts = 0
+    // Ошибка загрузки главного кадра: страница с ошибкой не должна считаться страницей входа
+    private var loadFailed = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -59,8 +63,34 @@ class OcmLoginActivity : AppCompatActivity() {
         web.settings.domStorageEnabled = true
         web.addJavascriptInterface(Bridge(), "ChargeBridge")
         web.webViewClient = object : WebViewClient() {
+            override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
+                loadFailed = false
+            }
+
+            // Редирект на http:// (он блокируется Android): переводим на https и открываем снова
+            override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
+                val upgraded = request?.url?.toString()?.let { OcmAuth.httpsUpgrade(it) } ?: return false
+                view?.loadUrl(upgraded)
+                return true
+            }
+
+            override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
+                val req = request ?: return
+                if (!req.isForMainFrame) return
+                loadFailed = true
+                val upgraded = req.url?.toString()?.let { OcmAuth.httpsUpgrade(it) }
+                if (upgraded != null) {
+                    view?.loadUrl(upgraded)
+                } else {
+                    status.text = getString(R.string.ocm_status_network)
+                }
+            }
+
             override fun onPageFinished(view: WebView?, url: String?) {
-                onPage(url.orEmpty())
+                val current = url.orEmpty()
+                // Страницы с ошибкой и незащищённые адреса обрабатывать не нужно
+                if (loadFailed || current.startsWith("http://")) return
+                onPage(current)
             }
         }
 
@@ -83,8 +113,9 @@ class OcmLoginActivity : AppCompatActivity() {
             }
             val e = email
             val p = password
-            if (!autofillDone && e != null && p != null) {
-                autofillDone = true
+            if (e != null && p != null && autofillAttempts < MAX_AUTOFILL_ATTEMPTS) {
+                // Пароль остаётся в памяти до успешного входа: если страница перезагрузится, форма заполнится снова
+                autofillAttempts++
                 web.evaluateJavascript(OcmAuth.fillScript(e, p)) { result ->
                     status.text = if (result.contains("nofields") || result.contains("nosubmit")) {
                         getString(R.string.ocm_status_need_manual)
@@ -92,10 +123,7 @@ class OcmLoginActivity : AppCompatActivity() {
                         getString(R.string.ocm_status_login)
                     }
                 }
-                // Пароль больше не нужен приложению: форма уже отправлена
-                email = null
-                password = null
-            } else if (autofillDone) {
+            } else if (autofillAttempts > 0) {
                 status.text = getString(R.string.ocm_status_failed)
             } else {
                 status.text = getString(R.string.ocm_status_need_manual)
@@ -104,8 +132,11 @@ class OcmLoginActivity : AppCompatActivity() {
         }
 
         if (stage == Stage.LOGIN) {
-            // Вход выполнен (автоматически или вручную): переходим к списку приложений
+            // Вход выполнен (автоматически или вручную): переходим к списку приложений.
+            // Пароль больше не нужен, очищаем его из памяти
             stage = Stage.APPS
+            email = null
+            password = null
             status.text = getString(R.string.ocm_status_apps)
             web.loadUrl(OcmAuth.APPS_URL)
             return
@@ -180,6 +211,7 @@ class OcmLoginActivity : AppCompatActivity() {
     companion object {
         const val EXTRA_EMAIL = "ocm_email"
         const val EXTRA_PASSWORD = "ocm_password"
+        private const val MAX_AUTOFILL_ATTEMPTS = 2
 
         fun intent(context: android.content.Context, email: String, password: String): Intent =
             Intent(context, OcmLoginActivity::class.java)

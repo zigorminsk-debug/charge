@@ -3,6 +3,7 @@ package by.charge.overlay.data
 import by.charge.overlay.net.Http
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import org.json.JSONObject
 
 /**
@@ -58,6 +59,17 @@ object OcmAuth {
     /** JavaScript: отдаёт весь видимый текст страницы в нативный мост ChargeBridge.onText. */
     const val READ_TEXT_JS =
         "(function(){ ChargeBridge.onText(document.body ? document.body.innerText : ''); })();"
+
+    /**
+     * Если адрес — незащищённая ссылка на openchargemap.org, возвращает ту же ссылку на https.
+     * Открытый HTTP для входа недопустим: пароль и cookie сессии ушли бы без шифрования.
+     * Для любых других адресов возвращает null.
+     */
+    fun httpsUpgrade(url: String): String? {
+        val parsed = url.toHttpUrlOrNull() ?: return null
+        if (parsed.scheme != "http" || parsed.host != "openchargemap.org") return null
+        return parsed.newBuilder().scheme("https").build().toString()
+    }
 
     /** Адрес для проверки ключа: справочник OCM отвечает только при верном ключе. */
     fun validationUrl(key: String): HttpUrl =

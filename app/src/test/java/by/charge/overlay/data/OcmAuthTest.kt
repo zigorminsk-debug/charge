@@ -2,6 +2,7 @@ package by.charge.overlay.data
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -49,5 +50,17 @@ class OcmAuthTest {
         assertTrue(url.startsWith("https://api.openchargemap.io/v3/referencedata/"))
         assertTrue(url.contains("key=68bfccab-cb66-449f-9b0c-e4d8422990d1"))
         assertEquals(1, url.split("key=").size - 1)
+    }
+
+    @Test
+    fun plainHttpOnOcmIsUpgradedToHttps() {
+        assertEquals(
+            "https://openchargemap.org/loginprovider/beginlogin?x=1",
+            OcmAuth.httpsUpgrade("http://openchargemap.org/loginprovider/beginlogin?x=1"),
+        )
+        assertNull(OcmAuth.httpsUpgrade("https://openchargemap.org/loginprovider/beginlogin"))
+        // Чужой домен с таким же началом не трогаем
+        assertNull(OcmAuth.httpsUpgrade("http://openchargemap.org.example.com/"))
+        assertNull(OcmAuth.httpsUpgrade("http://example.com/"))
     }
 }

@@ -94,4 +94,5 @@
     <string name="settings_manual">Ввести вручную</string>
     <string name="settings_remove">Удалить ключ</string>
     <string name="settings_removed">Ключ удалён</string>
+    <string name="ocm_status_network">Не удалось открыть страницу OCM. Проверьте интернет и попробуйте снова.</string>
 </resources>
