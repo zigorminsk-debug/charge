@@ -30,7 +30,6 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
-import org.osmdroid.api.IGeoPoint
 import org.osmdroid.config.Configuration
 import org.osmdroid.events.MapEventsReceiver
 import org.osmdroid.events.MapListener
@@ -112,12 +111,12 @@ class MainActivity : AppCompatActivity() {
 
         // Тап по пустому месту карты закрывает карточку
         map.overlays.add(MapEventsOverlay(object : MapEventsReceiver {
-            override fun singleTapConfirmedHelper(p: IGeoPoint?): Boolean {
+            override fun singleTapConfirmedHelper(p: GeoPoint?): Boolean {
                 hideCard()
                 return true
             }
 
-            override fun longPressHelper(p: IGeoPoint?): Boolean = false
+            override fun longPressHelper(p: GeoPoint?): Boolean = false
         }))
         map.addMapListener(object : MapListener {
             override fun onScroll(event: ScrollEvent?): Boolean {
