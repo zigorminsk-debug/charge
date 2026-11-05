@@ -2,7 +2,6 @@ package by.charge.overlay.nav
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -22,7 +21,7 @@ class NavigationTest {
 
     @Test
     fun parsesGeometryAndSteps() {
-        val route = assertNotNull(Routing.parse(sampleJson))
+        val route = Routing.parse(sampleJson)!!
         assertEquals(2, route.geometry.size)
         assertEquals(53.9, route.geometry[0].lat, 1e-9)
         assertEquals(27.5, route.geometry[0].lon, 1e-9)
