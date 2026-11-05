@@ -10,11 +10,12 @@ import org.json.JSONObject
  * Координаты берутся только из OSM, ничего не выдумывается.
  */
 object OverpassSource {
-    /** Публичные зеркала Overpass: если один не отвечает, пробуем следующий. */
+    /** Публичные зеркала Overpass. Запросы идут параллельно, побеждает первый успешный ответ. */
     val ENDPOINTS = listOf(
         "https://overpass-api.de/api/interpreter",
         "https://overpass.kumi.systems/api/interpreter",
-        "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
+        "https://overpass.openstreetmap.fr/api/interpreter",
+        "https://overpass.openstreetmap.ru/api/interpreter",
     )
     private const val SOURCE = "osm"
 

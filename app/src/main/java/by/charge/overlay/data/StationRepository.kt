@@ -3,9 +3,15 @@ package by.charge.overlay.data
 import by.charge.overlay.geo.Geo
 import by.charge.overlay.net.Http
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.withContext
+import java.io.IOException
 import java.net.SocketTimeoutException
+import java.util.Collections
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * Загружает станции из OpenStreetMap (основной источник) и, если включён, из Open Charge Map.
@@ -23,7 +29,7 @@ class StationRepository(private val networks: Networks) {
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            errors.add("OSM: ${describe(e)}")
+            errors.add("OSM: ${e.message ?: e.javaClass.simpleName}")
             emptyList()
         }
 
@@ -35,7 +41,7 @@ class StationRepository(private val networks: Networks) {
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                errors.add("OCM: ${describe(e)}")
+                errors.add("OCM: ${e.message ?: e.javaClass.simpleName}")
                 emptyList()
             }
         }
@@ -51,27 +57,42 @@ class StationRepository(private val networks: Networks) {
         LoadResult(merged, errors)
     }
 
-    /** Перебирает зеркала Overpass по очереди; возвращает первый успешный ответ. */
-    private fun fetchOverpass(lat: Double, lon: Double, radiusM: Int): List<Station> {
+    /**
+     * Опрашивает все зеркала Overpass параллельно и возвращает первый успешный ответ.
+     * Если ответили ошибкой все, в исключении перечислены причины по каждому серверу.
+     */
+    private suspend fun fetchOverpass(lat: Double, lon: Double, radiusM: Int): List<Station> {
         val query = OverpassSource.query(lat, lon, radiusM)
-        var lastError: Exception? = null
+        val winner = CompletableDeferred<List<Station>>()
+        val errors = Collections.synchronizedList(mutableListOf<String>())
+        val pending = AtomicInteger(OverpassSource.ENDPOINTS.size)
+
         for (endpoint in OverpassSource.ENDPOINTS) {
-            try {
-                return OverpassSource.parse(Http.postForm(endpoint, mapOf("data" to query)), networks)
-            } catch (e: Exception) {
-                lastError = e
+            val host = endpoint.substringAfter("://").substringBefore("/")
+            // Отдельный scope: запрос, проигравший гонку, доработает сам и не блокирует результат
+            OVERPASS_SCOPE.launch {
+                try {
+                    winner.complete(OverpassSource.parse(Http.postForm(endpoint, mapOf("data" to query)), networks))
+                } catch (e: Exception) {
+                    errors.add("$host: ${describe(e)}")
+                    if (pending.decrementAndGet() == 0) {
+                        winner.completeExceptionally(IOException(errors.sorted().joinToString("; ")))
+                    }
+                }
             }
         }
-        throw lastError ?: IllegalStateException("нет доступных серверов Overpass")
+        return winner.await()
     }
 
     private fun describe(e: Exception): String = when (e) {
-        is SocketTimeoutException -> "сервер не ответил вовремя, попробуйте позже"
+        is SocketTimeoutException -> "не ответил вовремя"
         else -> e.message ?: e.javaClass.simpleName
     }
 
     companion object {
         /** Open Charge Map отвечает 403 без API-ключа, поэтому по умолчанию выключен. */
         const val OPEN_CHARGE_MAP_ENABLED = false
+
+        private val OVERPASS_SCOPE = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     }
 }
