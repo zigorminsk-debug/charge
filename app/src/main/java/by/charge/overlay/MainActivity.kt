@@ -329,7 +329,7 @@ class MainActivity : AppCompatActivity() {
         if (m < 1000) "${m.toInt()} м" else String.format(Locale.US, "%.1f км", m / 1000.0)
 
     private fun dot(color: Int): GradientDrawable = GradientDrawable().apply {
-        shape = GradientDrawable.OVAL
+        setShape(GradientDrawable.OVAL)
         setColor(color)
         setStroke(dp(2), Color.WHITE)
         setSize(dp(18), dp(18))

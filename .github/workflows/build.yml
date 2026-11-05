@@ -42,7 +42,9 @@ jobs:
           gradle-version: '8.9'
 
       - name: Unit tests
-        run: gradle --no-daemon test
+        run: |
+          echo "::add-matcher::.github/problem-matchers/gradle.json"
+          gradle --no-daemon test
 
       - name: Upload test reports
         if: always()
@@ -53,7 +55,9 @@ jobs:
           if-no-files-found: ignore
 
       - name: Build signed release APK and AAB
-        run: gradle --no-daemon assembleRelease bundleRelease
+        run: |
+          echo "::add-matcher::.github/problem-matchers/gradle.json"
+          gradle --no-daemon assembleRelease bundleRelease
 
       - name: Verify APK signature matches the committed key
         run: |
