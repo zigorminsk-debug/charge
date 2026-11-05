@@ -101,6 +101,8 @@ dependencies {
     implementation("com.google.android.material:material:1.12.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    // Карта OpenStreetMap без API-ключа (тайлы openstreetmap.org)
+    implementation("org.osmdroid:osmdroid-android:6.1.20")
 
     testImplementation("junit:junit:4.13.2")
     // Настоящий org.json для JVM-тестов (заглушка из android.jar не работает в unit-тестах)

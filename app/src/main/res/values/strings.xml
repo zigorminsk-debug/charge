@@ -1,26 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Charge HUD</string>
-    <string name="need_permissions">Нужны геолокация и разрешение «Поверх других приложений»</string>
-    <string name="channel_name">Слой зарядных станций</string>
-    <string name="notif_title">Charge HUD работает</string>
-    <string name="notif_text">Слой зарядных станций поверх навигатора</string>
-    <string name="notif_stop">Остановить</string>
-    <string name="route">Маршрут</string>
-    <string name="waiting_gps">Ожидание GPS…</string>
+    <string name="waiting_gps">Ждём GPS…</string>
     <string name="loading">Загрузка станций…</string>
-    <string name="load_error">Ошибка загрузки: %1$s</string>
-    <string name="no_stations">Станций в радиусе нет</string>
+    <string name="status_count">Станций на карте: %1$d</string>
+    <string name="load_error">ошибка загрузки: %1$s</string>
+    <string name="location_denied">Геолокация не выдана — карта показана на Минске</string>
+    <string name="chip_all">Все (%1$d)</string>
+    <string name="route_button">Маршрут в Яндекс Навигаторе</string>
+    <string name="card_close">Закрыть</string>
+    <string name="fab_me">Моё местоположение</string>
     <string name="navigator_missing">Яндекс Навигатор не найден</string>
-    <string name="perm_overlay">Поверх других приложений</string>
-    <string name="perm_location">Геолокация</string>
-    <string name="perm_notif">Уведомления</string>
-    <string name="btn_overlay">1. Разрешить «Поверх других приложений»</string>
-    <string name="btn_location">2. Разрешить геолокацию</string>
-    <string name="btn_notif">3. Разрешить уведомления</string>
-    <string name="radius_label">Радиус поиска станций: %1$d км</string>
-    <string name="btn_start">▶ Запустить слой</string>
-    <string name="btn_stop">■ Остановить слой</string>
-    <string name="btn_navi">Открыть Яндекс Навигатор</string>
-    <string name="footer">Данные: OpenStreetMap contributors (ODbL), Open Charge Map (CC BY 4.0). Приложение не связано с Яндексом, Малинкой или BatteryFly.</string>
 </resources>
