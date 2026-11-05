@@ -22,6 +22,7 @@ object OverpassSource {
 
     private const val SOURCE = "osm"
 
+    // Названия разъёмов из тегов socket:* для показа пользователю. Неизвестный тип выводится как есть.
     /** Человекочитаемые имена типов разъёмов из тегов socket:*. */
     private val SOCKET_NAMES = mapOf(
         "type1" to "Type 1",
@@ -36,6 +37,8 @@ object OverpassSource {
         "schuko" to "Schuko",
     )
 
+    // Запрос Overpass QL: все узлы и ways с amenity=charging_station внутри bbox.
+    // out center даёт координаты для ways (для узлов — lat/lon напрямую).
     fun query(box: Box): String {
         val bbox = "(${box.minLat},${box.minLon},${box.maxLat},${box.maxLon})"
         return "[out:json][timeout:25];(" +
@@ -49,6 +52,7 @@ object OverpassSource {
         val out = ArrayList<Station>(elements.length())
         for (i in 0 until elements.length()) {
             val e = elements.optJSONObject(i) ?: continue
+            // Координаты: у узла они в lat/lon, у way — в center. Элементы без координат пропускаем.
             val center = e.optJSONObject("center")
             val lat = e.optDouble("lat", center?.optDouble("lat", Double.NaN) ?: Double.NaN)
             val lon = e.optDouble("lon", center?.optDouble("lon", Double.NaN) ?: Double.NaN)
@@ -63,10 +67,14 @@ object OverpassSource {
                 tags.optString("name"),
             )
 
+            // Максимальная мощность станции: сначала maxpower, затем charging_station:output.
+            // Ниже она может вырасти по тегам socket:<тип>:output.
             var maxKw: Double? = parseKw(tags.optString("maxpower"))
                 ?: parseKw(tags.optString("charging_station:output"))
 
             // socket:<тип>=<кол-во> и socket:<тип>:output=<кВт>
+            // Разъёмы в OSM: socket:<тип>=N — количество (по умолчанию 1), socket:<тип>:output — мощность.
+            // Теги вида socket:<тип>:<что-то ещё> пропускаем (не количество и не мощность).
             val counts = LinkedHashMap<String, Int>()
             val powers = HashMap<String, Double>()
             val keys = tags.keys()
@@ -93,6 +101,8 @@ object OverpassSource {
                 )
             }
 
+            // Статус из OSM. Тег operational_status встречается редко; disused=yes даёт DISUSED.
+            // Всё остальное — UNKNOWN (статус неизвестен, станция всё равно показывается).
             val status = when (tags.optString("operational_status")) {
                 "operational" -> ChargerStatus.OPERATIONAL
                 "broken", "out_of_order" -> ChargerStatus.BROKEN
@@ -102,6 +112,7 @@ object OverpassSource {
             val label = networks.labelFor(brand, operator)
             out.add(
                 Station(
+                    // id вида osm-node-123 / osm-way-456: по нему дедуплицируются и выбираются станции (announcedStops).
                     id = "osm-${e.optString("type")}-${e.optLong("id")}",
                     lat = lat,
                     lon = lon,
@@ -127,9 +138,12 @@ object OverpassSource {
  * Даёт статусы станций и разъёмов, поэтому это основной источник статусов.
  */
 object OpenChargeMapSource {
+    // Основной API Open Charge Map. Ключ передаётся параметром key (или заголовком X-API-Key).
+    // Без ключа OCM отвечает 403, поэтому StationRepository пропускает OCM, если ключа нет.
     const val ENDPOINT = "https://api.openchargemap.io/v3/poi/"
     private const val SOURCE = "ocm"
 
+    // Станции вокруг точки, до 500 штук. compact=false нужен, чтобы в ответе были Connections и StatusType.
     fun url(lat: Double, lon: Double, radiusKm: Double, apiKey: String): HttpUrl =
         ENDPOINT.toHttpUrl().newBuilder()
             .addQueryParameter("output", "json")
@@ -145,6 +159,8 @@ object OpenChargeMapSource {
 
     /** Статус из объекта StatusType (IsOperational или Title). null — данных нет. */
     internal fun statusOf(obj: JSONObject?): ChargerStatus? {
+    // Порядок проверки: Title со словом «Removed» → DISUSED; затем IsOperational (true/false);
+    // затем текст Title («Not Operational», «Operational»). null — данных нет.
         if (obj == null) return null
         val title = obj.optString("Title")
         if (title.contains("Removed", ignoreCase = true)) return ChargerStatus.DISUSED
@@ -169,6 +185,7 @@ object OpenChargeMapSource {
             if (lat.isNaN() || lon.isNaN()) continue
 
             val operator = p.optJSONObject("OperatorInfo")?.optString("Title")?.trim()?.ifEmpty { null }
+            // Название адреса из OCM: используется как название станции и для поиска бренда.
             val addressTitle = ai.optString("Title").trim()
             val brand = networks.match(operator, addressTitle)
             val label = networks.labelFor(brand, operator)
@@ -179,6 +196,7 @@ object OpenChargeMapSource {
             if (conns != null) {
                 for (j in 0 until conns.length()) {
                     val c = conns.optJSONObject(j) ?: continue
+                    // Мощность разъёма в кВт. Во многих записях OCM её нет, тогда kw = null.
                     val kw = c.optDouble("PowerKW", Double.NaN).takeUnless { it.isNaN() }
                     if (kw != null && (maxKw == null || kw > maxKw)) maxKw = kw
                     val type = c.optJSONObject("ConnectionType")?.optString("Title")?.trim()?.ifEmpty { null } ?: "?"
@@ -193,6 +211,8 @@ object OpenChargeMapSource {
                 }
             }
 
+            // Статус станции. Если на уровне станции его нет, берём по разъёмам:
+            // все работают → работает; все не работают → не работает; иначе — неизвестно.
             val status = statusOf(p.optJSONObject("StatusType")) ?: when {
                 outlets.isNotEmpty() && outlets.all { it.status == ChargerStatus.OPERATIONAL } -> ChargerStatus.OPERATIONAL
                 outlets.isNotEmpty() && outlets.all { it.status == ChargerStatus.BROKEN } -> ChargerStatus.BROKEN
@@ -201,6 +221,7 @@ object OpenChargeMapSource {
 
             out.add(
                 Station(
+                    // id вида ocm-<ID точки в OCM>.
                     id = "ocm-${p.optInt("ID")}",
                     lat = lat,
                     lon = lon,

@@ -4,6 +4,7 @@ plugins {
     id("org.jetbrains.kotlin.android") version "1.9.24" apply false
 }
 
+// Задача clean удаляет каталог build корневого проекта.
 tasks.register<Delete>("clean") {
     delete(rootProject.layout.buildDirectory)
 }

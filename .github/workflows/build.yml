@@ -11,9 +11,11 @@ on:
   schedule:
     - cron: '0 3 * * *'
 
+# Право записи нужно только для создания GitHub Release (это делается только для main).
 permissions:
   contents: write
 
+# Для одной ветки идёт один прогон: новый push отменяет предыдущий.
 concurrency:
   group: build-${{ github.ref }}
   cancel-in-progress: true
@@ -41,6 +43,7 @@ jobs:
         with:
           gradle-version: '8.9'
 
+      # Юнит-тесты на JVM. Если тест падает, следующие шаги (APK) не выполняются.
       - name: Unit tests
         run: |
           echo "::add-matcher::.github/problem-matchers/gradle.json"
@@ -59,6 +62,8 @@ jobs:
           echo "::add-matcher::.github/problem-matchers/gradle.json"
           gradle --no-daemon assembleRelease bundleRelease
 
+      # Подпись APK должна совпадать с закоммиченным сертификатом signing/cert-sha256.txt.
+      # Так видно, что релиз подписан нашим ключом, а не случайным.
       - name: Verify APK signature matches the committed key
         run: |
           set -euo pipefail
@@ -70,6 +75,7 @@ jobs:
           echo "expected=$EXPECTED actual=$ACTUAL"
           test "$ACTUAL" = "$EXPECTED"
 
+      # APK и AAB доступны как артефакты прогона на GitHub.
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -79,6 +85,7 @@ jobs:
             app/build/outputs/bundle/release/*.aab
           if-no-files-found: error
 
+      # Релиз создаётся только для main. Тег v<число коммитов>, как и versionCode. Если тег уже есть, шаг ничего не делает.
       - name: Publish GitHub Release (только main)
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         env:

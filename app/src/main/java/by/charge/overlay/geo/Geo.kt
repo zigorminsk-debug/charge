@@ -8,7 +8,9 @@ import kotlin.math.pow
 import kotlin.math.sin
 import kotlin.math.sqrt
 
+// Геометрия на сфере: расстояние и азимут. Точности достаточно для города и маршрутов до сотен км.
 object Geo {
+    // Средний радиус Земли. Модель сферы даёт ошибку меньше 0,5%: для навигации по городу этого достаточно.
     private const val EARTH_RADIUS_M = 6_371_000.0
 
     /** Расстояние по большому кругу (формула гаверсинуса), в метрах. */
@@ -28,6 +30,7 @@ object Geo {
         val dLon = Math.toRadians(lon2 - lon1)
         val y = sin(dLon) * cos(p2)
         val x = cos(p1) * sin(p2) - sin(p1) * cos(p2) * cos(dLon)
+        // atan2 даёт угол от −180 до 180; прибавляем 360 и берём остаток, чтобы получить 0..360.
         return (Math.toDegrees(atan2(y, x)) + 360.0) % 360.0
     }
 }

@@ -1,3 +1,4 @@
+// Тесты входа в OCM: поиск GUID-кандидатов, распознавание страниц, скрипт заполнения (экранирование, только кнопки формы), адрес проверки ключа, https-редирект.
 package by.charge.overlay.data
 
 import org.junit.Assert.assertEquals

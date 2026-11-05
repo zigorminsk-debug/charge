@@ -25,11 +25,14 @@ class StationRepository(
     private val apiKey: () -> String?,
 ) {
 
+    // Результат загрузки: станции и тексты ошибок по источникам.
+    // Ошибки показываются в статусной строке, но не отменяют станции, которые удалось получить.
     data class LoadResult(val stations: List<Station>, val errors: List<String>)
 
     suspend fun load(box: Box): LoadResult = withContext(Dispatchers.IO) {
         val errors = ArrayList<String>()
 
+        // Сначала OSM. Ошибка OSM записывается в errors, загрузка OCM продолжается.
         val osm: List<Station> = try {
             fetchOverpass(box)
         } catch (e: CancellationException) {
@@ -39,6 +42,7 @@ class StationRepository(
             emptyList()
         }
 
+        // Ключ читается при каждой загрузке (лямбда), поэтому после входа в OCM он применяется сразу.
         val key = apiKey()?.trim().orEmpty()
         val ocm: List<Station> = if (key.isEmpty()) {
             emptyList()
@@ -58,6 +62,9 @@ class StationRepository(
         // Статус берём из OCM, если он там есть: это единственный источник статусов.
         val merged = ArrayList<Station>(osm)
         for (s in ocm) {
+            // Слияние: станция OCM в пределах 50 м от станции OSM считается той же станцией.
+            // Тогда берём разъёмы и мощность OSM (если есть), а статус — из OCM (OCM — основной источник статусов).
+            // Станции OCM без двойника добавляются как есть.
             val twin = osm.firstOrNull { Geo.distanceM(it.lat, it.lon, s.lat, s.lon) < 50.0 }
             if (twin == null) {
                 merged.add(s)
@@ -70,6 +77,7 @@ class StationRepository(
                 )
             }
         }
+        // Станции «выведена из эксплуатации» не показываем ни на карте, ни в маршрутах.
         val visible = merged.filter { it.status != ChargerStatus.DISUSED }
         LoadResult(
             visible.sortedBy { Geo.distanceM(box.centerLat, box.centerLon, it.lat, it.lon) },
@@ -82,6 +90,9 @@ class StationRepository(
      * Если ответили ошибкой все, в исключении перечислены причины по каждому серверу.
      */
     private suspend fun fetchOverpass(box: Box): List<Station> {
+    // Каждое зеркало Overpass запускается в своей корутине (OVERPASS_SCOPE).
+    // Первый успешный ответ завершает winner; проигравшие запросы дорабатывают сами и не блокируют результат.
+    // Ошибку winner получает только тогда, когда ответили с ошибкой все зеркала.
         val query = OverpassSource.query(box)
         val winner = CompletableDeferred<List<Station>>()
         val errors = Collections.synchronizedList(mutableListOf<String>())
@@ -104,12 +115,14 @@ class StationRepository(
         return winner.await()
     }
 
+    // Короткое описание ошибки для статусной строки: таймаут — отдельная фраза.
     private fun describe(e: Exception): String = when (e) {
         is SocketTimeoutException -> "не ответил вовремя"
         else -> e.message ?: e.javaClass.simpleName
     }
 
     companion object {
+        // Отдельный scope не отменяется вместе с вызовом load: запросы, проигравшие гонку, спокойно завершаются.
         private val OVERPASS_SCOPE = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     }
 }

@@ -1,3 +1,4 @@
+// Тесты прямоугольника: радиус вокруг точки и расширение области с включением точек.
 package by.charge.overlay.geo
 
 import by.charge.overlay.nav.LatLon

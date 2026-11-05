@@ -1,3 +1,4 @@
+// Тесты поворота карты: направление движения смотрит вверх, перенос через 0/360, кратчайшая разница углов.
 package by.charge.overlay.nav
 
 import org.junit.Assert.assertEquals

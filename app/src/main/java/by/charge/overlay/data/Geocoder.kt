@@ -15,6 +15,7 @@ data class Place(val name: String, val lat: Double, val lon: Double)
 object Geocoder {
     const val ENDPOINT = "https://nominatim.openstreetmap.org/search"
 
+    // Запрос к Nominatim: только Беларусь (countrycodes=by), ответ на русском, не больше 5 мест.
     fun url(query: String): HttpUrl =
         ENDPOINT.toHttpUrl().newBuilder()
             .addQueryParameter("q", query)
@@ -24,6 +25,7 @@ object Geocoder {
             .addQueryParameter("accept-language", "ru")
             .build()
 
+    // Разбор ответа. Места без корректных lat/lon пропускаются. Пустое название заменяется координатами.
     fun parse(json: String): List<Place> {
         val arr = JSONArray(json)
         val out = ArrayList<Place>(arr.length())
@@ -37,5 +39,6 @@ object Geocoder {
         return out
     }
 
+    // Синхронный запрос: вызывать только из IO-потока (MainActivity.askAddress делает это в withContext).
     fun search(query: String): List<Place> = parse(Http.get(url(query.trim())))
 }

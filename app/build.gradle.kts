@@ -3,6 +3,7 @@ import java.io.FileInputStream
 import java.util.Properties
 import java.util.concurrent.TimeUnit
 
+// Модуль приложения «Charge HUD» (пакет by.charge.overlay). Минимальная версия Android: 7.0 (minSdk 24).
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -41,6 +42,7 @@ val releaseKeystore: File = rootProject.file("signing/charge-overlay.p12")
 val hasReleaseSigning: Boolean =
     releaseKeystore.isFile && !signingProps.getProperty("storePassword").isNullOrEmpty()
 
+// Настройки Android: версии SDK, подпись, типы сборки, версия Java 17.
 android {
     namespace = "by.charge.overlay"
     compileSdk = 34
@@ -67,6 +69,7 @@ android {
         }
     }
 
+    // release: без минификации. Подписывается ключом из signing/, если он найден; иначе сборка без подписи.
     buildTypes {
         getByName("release") {
             isMinifyEnabled = false
@@ -90,11 +93,14 @@ android {
         unitTests.isReturnDefaultValues = true
     }
 
+    // Lint не валит сборку (abortOnError=false): предупреждения не блокируют CI.
     lint {
         abortOnError = false
     }
 }
 
+// Зависимости: AndroidX, Material, корутины, OkHttp (сеть), osmdroid (карта без ключей). Тесты: JUnit 4 и org.json.
+// Версии зафиксированы. При обновлении проверяйте сборку в CI: локального JDK в песочнице нет.
 dependencies {
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.appcompat:appcompat:1.7.0")

@@ -1,3 +1,4 @@
+// Тесты разбора ответа Nominatim и параметров запроса (ограничение Беларусью, язык ru).
 package by.charge.overlay.data
 
 import org.junit.Assert.assertEquals

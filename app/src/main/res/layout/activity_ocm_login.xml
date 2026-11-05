@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Экран входа OCM: строка статуса, встроенный WebView с сайтом OCM, кнопки «Найти ключ» и «Отмена». -->
+<!-- Используется OcmLoginActivity; ID: ocm_status, ocm_web, btn_find_key, btn_ocm_cancel. -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"

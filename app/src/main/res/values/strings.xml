@@ -1,4 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Строки интерфейса на русском. Префиксы: ocm_* и settings_* — вход в OCM и меню «Ключ OCM»; -->
+<!-- plan_* — планирование; strip_* — полоса станций; nav_* — навигация; card_* — карточка станции. -->
+<!-- Строки с %1$s и %2$d подставляются в код: при правке сохраняйте такие же подстановки. -->
 <resources>
     <string name="app_name">Charge HUD</string>
     <string name="waiting_gps">Ждём GPS…</string>

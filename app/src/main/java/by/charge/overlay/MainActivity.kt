@@ -75,9 +75,14 @@ import java.util.Locale
  * встроенная навигация: линия, баннер манёвров, голос, перестроение.
  */
 class MainActivity : AppCompatActivity() {
+    // Главный экран приложения: карта OSM, станции, карточка станции, планирование маршрута A → B, навигация.
+    // Разделы в файле помечены строками «// ---------- ... ----------». Состояние планирования и навигации хранится в полях класса.
+    // Порядок действий пользователя: GPS → загрузка станций (loadStations) → карточка (showCard) → план (buildPlan) → навигация (applyRoute / updateNavigation).
 
+    // Какая точка выбирается на карте долгим тапом: «Откуда» (FROM) или «Куда» (TO).
     private enum class PickTarget { FROM, TO }
 
+    // Элементы интерфейса из activity_main.xml. Заполняются в onCreate через findViewById.
     private lateinit var map: MapView
     private lateinit var statusText: TextView
     private lateinit var chips: ChipGroup
@@ -102,25 +107,34 @@ class MainActivity : AppCompatActivity() {
     private lateinit var repo: StationRepository
     private lateinit var prefs: android.content.SharedPreferences
 
+    // scope — корутины экрана (загрузка, геокодирование, маршруты). Отменяется в onDestroy.
+    // SupervisorJob: ошибка одной корутины не отменяет остальные. Dispatchers.Main.immediate: код выполняется в UI-потоке.
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val handler = Handler(Looper.getMainLooper())
+    // Отложенная загрузка станций. Несколько событий карты (прокрутка, зум) сливаются в одну загрузку через RELOAD_DELAY_MS.
     private val reloadRunnable = Runnable { loadStations() }
     private var loadJob: Job? = null
+    // Флаг пересборки фишек сетей. Без него слушатель выбора сработает на каждое добавление фишки.
     private var chipsRebuilding = false
 
+    // GPS: tracker создаётся после разрешения; myLocation — последняя точка; meMarker — синяя точка «я» на карте.
     private var tracker: LocationTracker? = null
     private var meMarker: Marker? = null
     private var myLocation: Location? = null
     private var firstFix = true
 
+    // Параметры последней загрузки станций: центр, время, был ли успех и тексты ошибок.
+    // По ним решаем, нужна ли новая загрузка (loadStations).
     private var lastLoadCenter: LatLon? = null
     private var lastLoadMs = 0L
     private var lastLoadOk = true
     private var loadErrors: List<String> = emptyList()
 
+    // Станции для текущей области карты. visibleCount — сколько показано после фильтра по сети.
     private var stations: List<Station> = emptyList()
     private var visibleCount = 0
     private var selectedBrand: String? = null
+    // Маркеры станций и маркеры остановок маршрута держим отдельно, чтобы очищать каждую группу независимо.
     private val stationMarkers = mutableListOf<Marker>()
     private val stopMarkers = mutableListOf<Marker>()
 
@@ -134,6 +148,8 @@ class MainActivity : AppCompatActivity() {
     private var planFromLabel: String? = null
     private var planToPoint: LatLon? = null
     private var planToLabel: String? = null
+    // planJob — текущий расчёт маршрута (новый расчёт отменяет старый).
+    // planRoute, planStops и planDestination — результат расчёта для кнопки «Начать навигацию».
     private var planJob: Job? = null
     private var planRoute: Route? = null
     private var planStops: List<RoutePlanner.Stop> = emptyList()
@@ -146,17 +162,23 @@ class MainActivity : AppCompatActivity() {
     // Станции рядом с маршрутом (для полосы) и их положение вдоль текущего маршрута
     private var navNearby: List<Station> = emptyList()
     private var navCorridor: List<RoutePlanner.Stop> = emptyList()
+    // planNearby — станции вокруг маршрута, загруженные при расчёте. Из них строится полоса при старте навигации.
     private var planNearby: List<Station> = emptyList()
+    // Остановки, о которых уже сказали голосом (по id станции), чтобы не повторять объявление.
     private val announcedStops = HashSet<String>()
+    // Расчёт позиции на маршруте. Создаётся в applyRoute, обнуляется в stopNavigation.
     private var routeProgress: RouteProgress? = null
 
     // Поворот карты по движению: последняя точка, от которой считаем направление, и текущий угол карты
     private var headingFix: LatLon? = null
     private var mapRotationDeg = 0f
+    // Линия маршрута на карте и задача перестроения маршрута (routeJob).
+    // lastRerouteMs — антиспам перестроения. spokenStepIndex — номер манёвра, который уже объявлен голосом.
     private var routeLine: Polyline? = null
     private var routeJob: Job? = null
     private var lastRerouteMs = 0L
     private var spokenStepIndex = -1
+    // Синтез речи для голосовых подсказок. Язык ru-RU задаётся после инициализации движка.
     private var tts: TextToSpeech? = null
 
     // Результат входа в OCM: если ключ сохранён, перезагружаем станции
@@ -169,6 +191,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // Запрос разрешения на геолокацию. Результат обрабатывается в onPermissionResult.
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { onPermissionResult() }
@@ -181,6 +204,8 @@ class MainActivity : AppCompatActivity() {
             osmdroidBasePath = File(cacheDir, "osmdroid")
             osmdroidTileCache = File(cacheDir, "osmdroid/tiles")
         }
+        // Конфигурация osmdroid нужна до создания MapView (он читается из layout). userAgentValue обязателен по правилам OSM.
+        // Кэш тайлов лежит в cacheDir: система может его очистить, это безопасно.
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
@@ -215,19 +240,24 @@ class MainActivity : AppCompatActivity() {
         rangeInput = findViewById(R.id.range_km)
         planResult = findViewById(R.id.plan_result)
         btnPlanStart = findViewById(R.id.btn_plan_start)
+        // Репозиторий станций. Ключ OCM читается лямбдой при каждой загрузке, поэтому новый ключ работает без перезапуска.
         repo = StationRepository(Networks.load(this)) { prefs.getString(OcmAuth.PREF_KEY, null) }
 
+        // TTS инициализируется асинхронно. Если движок не запустился, речи не будет, а навигация работает.
         tts = TextToSpeech(this) { status ->
             if (status == TextToSpeech.SUCCESS) tts?.setLanguage(Locale("ru", "RU"))
         }
 
+        // Тайлы стандартного OSM (MAPNIK). Встроенные кнопки зума скрыты: масштаб жестами.
         map.setTileSource(TileSourceFactory.MAPNIK)
         map.setMultiTouchControls(true)
         map.zoomController.setVisibility(CustomZoomButtonsController.Visibility.NEVER)
+        // Стартовый вид: центр Минска, пока нет GPS. Когда появится первая точка, карта перейдёт к ней (onLocation).
         map.controller.setZoom(13.0)
         map.controller.setCenter(GeoPoint(MINSK_LAT, MINSK_LON))
 
         // Тап по пустому месту закрывает карточку; долгий тап ставит точку «Откуда»/«Куда» или точку назначения
+        // Слушатель событий карты: одиночный тап по пустому месту закрывает карточку, долгий тап — выбор точки (onMapLongPress).
         map.overlays.add(MapEventsOverlay(object : MapEventsReceiver {
             override fun singleTapConfirmedHelper(p: GeoPoint?): Boolean {
                 hideCard()
@@ -251,6 +281,7 @@ class MainActivity : AppCompatActivity() {
             }
         })
 
+        // Выбор сети: выбранная фишка задаёт selectedBrand (null — все сети), потом фильтр применяется заново.
         chips.setOnCheckedStateChangeListener { _, ids ->
             if (!chipsRebuilding) {
                 selectedBrand = ids.firstOrNull()?.let { id -> chips.findViewById<Chip>(id)?.tag as String? }
@@ -258,6 +289,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+        // Кнопка «моё местоположение»: центрирует карту на GPS-позиции, если она уже есть.
         fabMe.setOnClickListener {
             val loc = myLocation
             if (loc == null) {
@@ -266,9 +298,11 @@ class MainActivity : AppCompatActivity() {
                 map.controller.animateTo(GeoPoint(loc.latitude, loc.longitude))
             }
         }
+        // Кнопка «Маршрут» в карточке: встроенная навигация до точки карточки (станции или точки на карте).
         findViewById<Button>(R.id.btn_nav).setOnClickListener {
             cardDestination?.let { beginNavigation(it) }
         }
+        // Кнопка «Яндекс Навигатор»: открывает внешний маршрут до станции. Для точки на карте она скрыта.
         btnRouteExternal.setOnClickListener {
             val target = cardStation ?: return@setOnClickListener
             if (!NavigatorLauncher.openRoute(this, target.lat, target.lon)) {
@@ -286,6 +320,7 @@ class MainActivity : AppCompatActivity() {
             planFromLabel = null
             updatePlanLabels()
         }
+        // Адрес «Откуда»: поиск через Nominatim, пользователь выбирает место из списка.
         findViewById<Button>(R.id.btn_from_addr).setOnClickListener {
             askAddress { place ->
                 planFromPoint = LatLon(place.lat, place.lon)
@@ -302,9 +337,12 @@ class MainActivity : AppCompatActivity() {
             }
         }
         findViewById<Button>(R.id.btn_to_map).setOnClickListener { startPick(PickTarget.TO) }
+        // «Построить маршрут»: маршрут A → B, станции вдоль него, остановки и перестроение через них (buildPlan).
         findViewById<Button>(R.id.btn_build).setOnClickListener { buildPlan() }
+        // «Начать навигацию» по уже построенному плану. Новый запрос маршрута не делаем.
         btnPlanStart.setOnClickListener { startPlannedNavigation() }
         findViewById<Button>(R.id.btn_plan_clear).setOnClickListener { clearPlan() }
+        // Меню «Ключ OCM». Открывается из нижней кнопки и из кнопки «Ключ OCM» в верхней панели.
         findViewById<Button>(R.id.btn_settings).setOnClickListener { showSettings() }
         findViewById<Button>(R.id.btn_settings_top).setOnClickListener { showSettings() }
         updatePlanLabels()
@@ -313,6 +351,7 @@ class MainActivity : AppCompatActivity() {
         if (Permissions.hasLocation(this)) {
             startTracking()
         } else {
+            // Разрешения нет — запрашиваем. Станции грузятся и без GPS, по центру карты.
             permissionLauncher.launch(
                 arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)
             )
@@ -321,6 +360,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onResume() {
+    // osmdroid: MapView нужно уведомлять о жизненном цикле, иначе тайлы могут не обновляться.
         super.onResume()
         map.onResume()
     }
@@ -332,6 +372,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         handler.removeCallbacks(reloadRunnable)
+        // При закрытии экрана отменяем всё, что может обратиться к UI: отложенную загрузку, GPS, маршруты, речь.
         tracker?.stop()
         tracker = null
         routeJob?.cancel()
@@ -340,6 +381,7 @@ class MainActivity : AppCompatActivity() {
         tts?.stop()
         tts?.shutdown()
         tts = null
+        // Освобождаем ресурсы osmdroid.
         map.onDetach()
         super.onDestroy()
     }
@@ -353,6 +395,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun startTracking() {
+        // Повторный вызов не создаёт второй трекер GPS.
         if (tracker != null) return
         tracker = LocationTracker(this) { onLocation(it) }.also { it.start() }
     }
@@ -360,6 +403,7 @@ class MainActivity : AppCompatActivity() {
     private fun onLocation(loc: Location) {
         myLocation = loc
         val p = GeoPoint(loc.latitude, loc.longitude)
+        // Синяя точка «я»: создаётся один раз и дальше только двигается.
         var marker = meMarker
         if (marker == null) {
             marker = Marker(map)
@@ -369,11 +413,13 @@ class MainActivity : AppCompatActivity() {
             meMarker = marker
         }
         marker.position = p
+        // При первом фиксе центрируем карту на себе и загружаем станции вокруг.
         if (firstFix) {
             firstFix = false
             map.controller.setCenter(p)
             scheduleLoad()
         }
+        // Во время навигации каждое обновление GPS: центр карты на машине, поворот по курсу, пересчёт позиции на маршруте.
         if (navigating) {
             // Во время навигации карта следует за машиной и поворачивается по движению
             map.controller.setCenter(p)
@@ -385,6 +431,7 @@ class MainActivity : AppCompatActivity() {
 
     // ---------- Станции ----------
 
+    // Откладывает загрузку на RELOAD_DELAY_MS. Если загрузка уже ждёт, таймер перезапускается.
     private fun scheduleLoad() {
         handler.removeCallbacks(reloadRunnable)
         handler.postDelayed(reloadRunnable, RELOAD_DELAY_MS)
@@ -402,8 +449,10 @@ class MainActivity : AppCompatActivity() {
         val maxAge = if (lastLoadOk) RELOAD_AGE_MS else RETRY_AFTER_ERROR_MS
         if (moved < RELOAD_MOVE_M && now - lastLoadMs < maxAge) return
 
+        // Запоминаем центр и время до окончания запроса: повторный вызов не запустит тот же запрос.
         lastLoadCenter = center
         lastLoadMs = now
+        // Предыдущая загрузка (если ещё идёт) отменяется: нужен только результат для последнего центра карты.
         loadJob?.cancel()
         statusText.text = getString(R.string.loading)
         loadJob = scope.launch {
@@ -418,9 +467,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun rebuildChips() {
+        // Запоминаем выбранную сеть, чтобы после перезагрузки фильтр сохранился, если такая сеть ещё есть.
         val wanted = selectedBrand
         chipsRebuilding = true
         chips.removeAllViews()
+        // Фишка «Все» всегда первая. Остальные сети сортируются по числу станций.
         val all = chip(getString(R.string.chip_all, stations.size), null)
         chips.addView(all)
         stations.groupBy { it.brandId }.values
@@ -429,6 +480,7 @@ class MainActivity : AppCompatActivity() {
                 val first = group.first()
                 chips.addView(chip("${first.brandName} (${group.size})", first.brandId))
             }
+        // Если выбранной сети уже нет, выбираем «Все».
         val match = (0 until chips.childCount)
             .map { chips.getChildAt(it) as Chip }
             .firstOrNull { it.tag == wanted } ?: all
@@ -446,6 +498,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun applyFilter() {
+        // Перерисовка маркеров станций с учётом фильтра по сети. Красная обводка — станция не работает.
         map.overlays.removeAll(stationMarkers)
         stationMarkers.clear()
         val visible = stations.filter { selectedBrand == null || it.brandId == selectedBrand }
@@ -469,6 +522,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun updateStatusText() {
+        // Во время навигации и планирования строку статуса занимают эти режимы, счётчик станций туда не пишем.
         if (navigating || planPanel.visibility == View.VISIBLE) return
         val base = getString(R.string.status_count, visibleCount)
         statusText.text = if (loadErrors.isEmpty()) {
@@ -480,13 +534,16 @@ class MainActivity : AppCompatActivity() {
 
     // ---------- Карточка ----------
 
+    // Карточка станции: название, сеть, расстояние от меня, статус, макс. мощность, разъёмы. Карта центрируется на станции.
     private fun showCard(s: Station) {
         cardStation = s
         cardDestination = LatLon(s.lat, s.lon)
         cardTitle.text = s.title
         val lines = ArrayList<String>()
+        // Заголовок: бренд и оператор (оператор показываем, только если он отличается от бренда).
         val header = listOfNotNull(s.brandName, s.operator?.takeIf { it != s.brandName }).joinToString(" · ")
         lines.add(header)
+        // Расстояние от моей позиции. Без GPS эта строка не выводится.
         myLocation?.let { loc ->
             lines.add(Instructions.distance(Geo.distanceM(loc.latitude, loc.longitude, s.lat, s.lon)))
         }
@@ -504,6 +561,7 @@ class MainActivity : AppCompatActivity() {
         map.controller.animateTo(GeoPoint(s.lat, s.lon))
     }
 
+    // Карточка точки на карте (долгий тап): только координаты и кнопка «Маршрут». Кнопка Навигатора скрыта: у точки нет станции.
     private fun showCustomPoint(p: LatLon) {
         cardStation = null
         cardDestination = p
@@ -521,6 +579,7 @@ class MainActivity : AppCompatActivity() {
 
     // ---------- Планирование маршрута ----------
 
+    // Открываем панель планирования: карточку закрываем, кнопку «моё местоположение» прячем, чтобы не мешала.
     private fun showPlanPanel() {
         hideCard()
         planPanel.visibility = View.VISIBLE
@@ -557,6 +616,7 @@ class MainActivity : AppCompatActivity() {
         updatePlanLabels()
     }
 
+    // Режим выбора точки на карте: панель скрывается, следующий долгий тап поставит точку (onMapLongPress).
     private fun startPick(target: PickTarget) {
         pickTarget = target
         planPanel.visibility = View.GONE
@@ -572,6 +632,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // Подписи «Откуда» и «Куда». По умолчанию: «моё местоположение» и «не задано».
     private fun updatePlanLabels() {
         val fromText = planFromLabel ?: getString(R.string.plan_from_me_label)
         planFrom.text = getString(R.string.plan_from_label, fromText)
@@ -579,6 +640,7 @@ class MainActivity : AppCompatActivity() {
         planTo.text = getString(R.string.plan_to_label, toText)
     }
 
+    // Диалог адреса: ввод → Nominatim в IO-потоке → список мест → callback с выбранным местом.
     private fun askAddress(onPicked: (Place) -> Unit) {
         val input = EditText(this).apply {
             hint = getString(R.string.addr_hint)
@@ -591,6 +653,7 @@ class MainActivity : AppCompatActivity() {
                 val query = input.text.toString().trim()
                 if (query.isEmpty()) return@setPositiveButton
                 scope.launch {
+                    // Ошибка сети показываем тостом; пустой результат — отдельным сообщением.
                     val places = try {
                         withContext(Dispatchers.IO) { Geocoder.search(query) }
                     } catch (e: CancellationException) {
@@ -614,6 +677,8 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
+    // Меню «Ключ OCM»: войти по логину и паролю, ввести ключ вручную или удалить сохранённый ключ.
+    // Кнопка удаления видна только если ключ есть.
     private fun showSettings() {
         val hasKey = !prefs.getString(OcmAuth.PREF_KEY, null).isNullOrBlank()
         val builder = AlertDialog.Builder(this)
@@ -653,12 +718,15 @@ class MainActivity : AppCompatActivity() {
             .setMessage(R.string.ocm_login_hint)
             .setView(container)
             .setPositiveButton(R.string.ocm_login_go) { _, _ ->
+                // Адрес обрезаем пробелы; пароль не трогаем, пробелы в нём могут быть значимыми.
                 val email = emailInput.text.toString().trim()
                 val password = passInput.text.toString()
                 if (email.isEmpty() || password.isEmpty()) {
                     toast(R.string.ocm_login_empty)
                     return@setPositiveButton
                 }
+                // Логин и пароль передаём в OcmLoginActivity через Intent. Там пароль очищается после отправки формы.
+                // Результат придёт в ocmLauncher.
                 ocmLauncher.launch(OcmLoginActivity.intent(this, email, password))
             }
             .setNegativeButton(R.string.cancel, null)
@@ -677,6 +745,7 @@ class MainActivity : AppCompatActivity() {
             .setView(input)
             .setPositiveButton(R.string.settings_save) { _, _ ->
                 val key = input.text.toString().trim()
+                // Пустая строка удаляет ключ (сохраняем null). После этого станции перезагружаются без OCM.
                 prefs.edit().putString(OcmAuth.PREF_KEY, key.ifEmpty { null }).apply()
                 // Сбрасываем кэш, чтобы станции перезагрузились с учётом ключа
                 lastLoadCenter = null
@@ -687,10 +756,12 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
+    // Диапазон в км из поля: некорректный ввод → DEFAULT_RANGE_KM; значения ограничиваются MIN_RANGE_KM..MAX_RANGE_KM.
     private fun rangeKm(): Int =
         rangeInput.text.toString().toIntOrNull()?.coerceIn(MIN_RANGE_KM, MAX_RANGE_KM) ?: DEFAULT_RANGE_KM
 
     private fun buildPlan() {
+        // Нужны точка «Куда» и точка «Откуда». «Откуда» по умолчанию — текущая GPS-позиция.
         val to = planToPoint ?: run {
             toast(R.string.plan_need_to)
             return
@@ -699,6 +770,7 @@ class MainActivity : AppCompatActivity() {
             toast(R.string.plan_need_from)
             return
         }
+        // Значение нормализуем и показываем в поле, чтобы было видно, что применилось.
         val rangeKm = rangeKm()
         rangeInput.setText(rangeKm.toString())
 
@@ -708,11 +780,15 @@ class MainActivity : AppCompatActivity() {
         planResult.text = getString(R.string.plan_route_loading)
         planJob = scope.launch {
             try {
+                // Шаг 1: маршрут A → B без остановок. Он нужен, чтобы найти станции вдоль пути.
                 val base = Routing.fetch(listOf(from, to))
 
                 planResult.text = getString(R.string.plan_stations_loading)
+                // Шаг 2: станции в прямоугольнике вокруг маршрута с запасом STATION_PAD_KM.
                 val loaded = repo.load(Box.of(base.geometry).padded(STATION_PAD_KM))
 
+                // Шаг 3: выбор остановок по запасу хода. Если станции не хватает, текст предупреждения показываем в результате,
+                // а маршрут строим без остановок.
                 var stopWarning: String? = null
                 val picked = try {
                     RoutePlanner.pickStops(
@@ -725,6 +801,7 @@ class MainActivity : AppCompatActivity() {
                 }
 
                 // Перестраиваем маршрут через выбранные зарядки, чтобы линия реально проходила через них
+                // Шаг 4: если остановки есть, строим маршрут через них, чтобы линия реально проходила через станции.
                 val route = if (picked.isEmpty()) {
                     base
                 } else {
@@ -732,20 +809,24 @@ class MainActivity : AppCompatActivity() {
                         picked.map { LatLon(it.station.lat, it.station.lon) } + to
                     Routing.fetch(points)
                 }
+                // Шаг 5: положение остановок вдоль финального маршрута (он мог измениться после шага 4).
                 val stops = RoutePlanner.attach(RouteGeometry(route.geometry), picked.map { it.station })
 
+                // Сохраняем результат для кнопки «Начать навигацию» и рисуем его на карте.
                 planRoute = route
                 planStops = stops
                 planNearby = loaded.stations
                 planDestination = to
                 drawRoute(route.geometry)
                 drawStops(stops)
+                // Масштаб карты подгоняем под весь маршрут.
                 val bounds = Box.of(route.geometry)
                 map.zoomToBoundingBox(
                     BoundingBox(bounds.maxLat, bounds.maxLon, bounds.minLat, bounds.minLon),
                     true, 80,
                 )
                 showPlanResult(route, stops, stopWarning, loaded.errors, rangeKm)
+                // Маршрут готов: кнопка «Начать навигацию» появляется только после успешного расчёта.
                 btnPlanStart.visibility = View.VISIBLE
             } catch (e: CancellationException) {
                 throw e
@@ -770,6 +851,8 @@ class MainActivity : AppCompatActivity() {
                 Instructions.duration(route.durationS),
             )
         )
+        // Текст результата: сводка, затем список остановок (расстояние от старта, статус, разъёмы).
+        // Ошибки загрузки станций показываем здесь, но маршрут всё равно есть.
         if (stops.isEmpty()) {
             lines.add(getString(R.string.plan_no_stops))
         } else {
@@ -788,6 +871,7 @@ class MainActivity : AppCompatActivity() {
                         .ifEmpty { getString(R.string.plan_no_outlets) })
             }
         }
+        // Предупреждение о недостающих зарядках — последним, чтобы его было видно.
         stopWarning?.let { lines.add(getString(R.string.plan_warning, it)) }
         if (stationErrors.isNotEmpty()) {
             lines.add(getString(R.string.plan_station_errors, stationErrors.joinToString("; ")))
@@ -798,12 +882,15 @@ class MainActivity : AppCompatActivity() {
     private fun startPlannedNavigation() {
         val route = planRoute ?: return
         val to = planDestination ?: return
+        // Переходим к навигации: панель планирования закрываем, маршрут уже построен.
         hidePlanPanel()
+        // Запускаем навигацию по готовому плану без нового запроса к OSRM.
         applyRoute(route, to, planStops, planNearby)
     }
 
     private fun clearPlan() {
         planJob?.cancel()
+        // Сброс плана: маршрут, точки, станции и кнопка «Начать». Если навигация уже идёт, она не затрагивается.
         planJob = null
         planRoute = null
         planStops = emptyList()
@@ -819,6 +906,7 @@ class MainActivity : AppCompatActivity() {
         updatePlanLabels()
     }
 
+    // Убирает линию и остановки плана с карты. Во время навигации линию не трогаем: её рисует навигация.
     private fun clearPlanPreview() {
         if (!navigating) {
             routeLine?.let { map.overlays.remove(it) }
@@ -835,6 +923,7 @@ class MainActivity : AppCompatActivity() {
         for (st in stops) {
             val m = Marker(map)
             m.position = GeoPoint(st.station.lat, st.station.lon)
+            // Жёлтые точки — остановки маршрута. Тап открывает карточку станции.
             m.icon = dot(Color.rgb(255, 193, 7), Color.BLACK)
             m.setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
             m.title = st.station.title
@@ -850,6 +939,7 @@ class MainActivity : AppCompatActivity() {
 
     // ---------- Навигация ----------
 
+    // Навигация от текущей позиции до точки карточки, без остановок (кнопка «Маршрут» в карточке).
     private fun beginNavigation(to: LatLon) {
         val loc = myLocation
         if (loc == null) {
@@ -872,6 +962,7 @@ class MainActivity : AppCompatActivity() {
         reroute: Boolean,
     ) {
         routeJob?.cancel()
+        // При перестроении статус не меняем, чтобы текст не мигал.
         if (!reroute) statusText.text = getString(R.string.nav_building)
         routeJob = scope.launch {
             try {
@@ -884,6 +975,7 @@ class MainActivity : AppCompatActivity() {
                 } catch (e: Exception) {
                     emptyList()
                 }
+                // Остановки, которые планировались, переводим в положение вдоль нового маршрута.
                 val planned = RoutePlanner.attach(RouteGeometry(route.geometry), plannedStations)
                 applyRoute(route, to, planned, near)
             } catch (e: CancellationException) {
@@ -900,15 +992,18 @@ class MainActivity : AppCompatActivity() {
         stops: List<RoutePlanner.Stop>,
         nearby: List<Station>,
     ) {
+        // Новый маршрут: сбрасываем прогресс, голосовые метки и полосу станций.
         routeProgress = RouteProgress(route)
         navDestination = to
         navStops = stops
         navNearby = nearby
+        // Полоса: станции в коридоре 3 км вдоль нового маршрута. Они включают и не выбранные как остановки.
         navCorridor = RoutePlanner.corridor(RouteGeometry(route.geometry), nearby)
         spokenStepIndex = -1
         drawRoute(route.geometry)
         drawStops(stops)
         if (!navigating) {
+            // Первый запуск навигации: показываем баннер и не даём экрану гаснуть.
             navigating = true
             navBanner.visibility = View.VISIBLE
             window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -918,11 +1013,14 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun updateNavigation(me: LatLon) {
+        // Главная функция навигации: вызывается при каждом обновлении GPS.
         val progress = routeProgress ?: return
         val snap = progress.update(me)
         val now = SystemClock.elapsedRealtime()
+        // Полоса станций обновляется при каждом обновлении позиции.
         updateStopsStrip(snap.traveledM, snap.remainingM)
 
+        // Прибытие: одно голосовое объявление (метка ARRIVED), дальше обработка не нужна.
         if (snap.arrived) {
             navInstruction.text = getString(R.string.nav_arrived)
             navSub.text = ""
@@ -934,6 +1032,8 @@ class MainActivity : AppCompatActivity() {
         }
 
         val dest = navDestination
+        // Сошли с маршрута: пересчитываем не чаще REROUTE_MIN_INTERVAL_MS и не параллельно с предыдущим пересчётом.
+        // Пересчёт идёт от текущей точки через ещё не пройденные остановки.
         if (snap.offRouteM > RouteProgress.OFF_ROUTE_M && dest != null &&
             now - lastRerouteMs > REROUTE_MIN_INTERVAL_MS && routeJob?.isActive != true
         ) {
@@ -947,6 +1047,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         // Зарядка по пути: одно предупреждение заранее
+        // Каждая остановка по пути объявляется голосом один раз, когда до неё осталось меньше STOP_ANNOUNCE_M (метка в announcedStops).
         navStops.forEach { st ->
             val ahead = st.alongM - snap.traveledM
             if (ahead in 0.0..STOP_ANNOUNCE_M && announcedStops.add(st.station.id)) {
@@ -954,6 +1055,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+        // Текущий манёвр для баннера и голоса. Если манёвров больше нет, показываем «прибыли».
         val next = snap.nextStep
         if (next == null) {
             navInstruction.text = getString(R.string.nav_arrived)
@@ -966,6 +1068,7 @@ class MainActivity : AppCompatActivity() {
             Instructions.distance(snap.remainingM),
             Instructions.duration(snap.remainingS),
         )
+        // Голос: манёвр объявляется один раз, когда до него осталось меньше ANNOUNCE_M.
         if (snap.distanceToNextM < ANNOUNCE_M && snap.nextStepIndex != spokenStepIndex) {
             spokenStepIndex = snap.nextStepIndex
             speak(
@@ -981,6 +1084,7 @@ class MainActivity : AppCompatActivity() {
     private fun stopNavigation() {
         routeJob?.cancel()
         routeJob = null
+        // Выход из навигации: сбрасываем всё, что относилось к маршруту, и возвращаем карту «север вверх».
         navigating = false
         navDestination = null
         navStops = emptyList()
@@ -990,6 +1094,7 @@ class MainActivity : AppCompatActivity() {
         routeProgress = null
         headingFix = null
         mapRotationDeg = 0f
+        // Карта снова смотрит на север.
         map.setMapOrientation(0f)
         stopsList.removeAllViews()
         stopsStrip.visibility = View.GONE
@@ -998,6 +1103,7 @@ class MainActivity : AppCompatActivity() {
         map.overlays.removeAll(stopMarkers)
         stopMarkers.clear()
         navBanner.visibility = View.GONE
+        // Экран снова может гаснуть.
         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         tts?.stop()
         map.invalidate()
@@ -1006,6 +1112,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun drawRoute(points: List<LatLon>) {
         routeLine?.let { map.overlays.remove(it) }
+        // Линия маршрута: синяя, толщина 6 dp.
         val line = Polyline().apply {
             setPoints(points.map { GeoPoint(it.lat, it.lon) })
             outlinePaint.color = Color.rgb(0, 122, 255)
@@ -1025,19 +1132,24 @@ class MainActivity : AppCompatActivity() {
     private fun updateHeading(loc: Location) {
         val here = LatLon(loc.latitude, loc.longitude)
         val prev = headingFix
+        // moved — расстояние от опорной точки, по которой последний раз считали курс. Если прошли мало, курс по точкам не считаем: GPS шумит.
         val moved = prev?.let { Geo.distanceM(it.lat, it.lon, here.lat, here.lon) } ?: Double.MAX_VALUE
+        // Курс от GPS надёжен только на скорости (MIN_SPEED_FOR_BEARING_MS). На стоянке курс прыгает.
         val gpsBearing = if (loc.hasBearing() && loc.speed >= MIN_SPEED_FOR_BEARING_MS) loc.bearing.toDouble() else null
+        // Если курса от GPS нет, считаем направление по двум опорным точкам, если прошли достаточно.
         val bearing = gpsBearing
             ?: if (prev != null && moved >= MIN_MOVE_FOR_BEARING_M) {
                 Geo.bearingDeg(prev.lat, prev.lon, here.lat, here.lon)
             } else {
                 null
             }
+        // Новая опорная точка — когда прошли MIN_MOVE_FOR_BEARING_M.
         if (moved >= MIN_MOVE_FOR_BEARING_M) headingFix = here
         if (bearing == null) return
 
         // Карта повёрнута на -курс: направление движения оказывается сверху
         val target = Heading.mapRotation(bearing)
+        // Порог ROTATE_THRESHOLD_DEG: карта не дёргается при мелких изменениях курса.
         if (Heading.angleDelta(target, mapRotationDeg) >= ROTATE_THRESHOLD_DEG) {
             mapRotationDeg = target
             map.setMapOrientation(target)
@@ -1052,10 +1164,13 @@ class MainActivity : AppCompatActivity() {
         }
         stopsStrip.visibility = View.VISIBLE
         stopsList.removeAllViews()
+        // Впереди — станции полосы, которые ещё не проехали. Станции ближе STRIP_PASSED_TOLERANCE_M считаем пройденными.
         val ahead = navCorridor.filter { it.alongM > traveledM + STRIP_PASSED_TOLERANCE_M }
+        // Если впереди станций нет, пишем явный текст, а не оставляем полосу пустой.
         if (ahead.isEmpty()) {
             addStripText(getString(R.string.strip_none))
         }
+        // ★ — остановки, выбранные планировщиком. Остальные станции рядом с маршрутом помечаются ⚡.
         val plannedIds = navStops.map { it.station.id }.toSet()
         ahead.forEach { st ->
             addStripRow(
@@ -1067,6 +1182,7 @@ class MainActivity : AppCompatActivity() {
             )
         }
         addStripRow(
+            // Последняя строка полосы: финиш с оставшимся расстоянием. Карточки у финиша нет.
             distance = Instructions.distance(remainingM),
             title = getString(R.string.strip_finish),
             status = null,
@@ -1097,6 +1213,7 @@ class MainActivity : AppCompatActivity() {
         station: Station?,
         planned: Boolean,
     ) {
+        // Строка полосы: расстояние до станции, название, статус. Тап открывает карточку станции.
         val row = TextView(this).apply {
             text = buildString {
                 // ★ — остановка, выбранная планировщиком; ⚡ — просто станция рядом с маршрутом
@@ -1121,12 +1238,14 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
+    // Голос: QUEUE_FLUSH — новая фраза прерывает старую. Важнее свежести подсказки, чем очередь.
     private fun speak(text: String) {
         tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "nav")
     }
 
     // ---------- Утилиты ----------
 
+    // Круглый маркер заданного цвета с обводкой (ring). Цвет маркера — цвет бренда.
     private fun dot(color: Int, ring: Int): GradientDrawable = GradientDrawable().apply {
         setShape(GradientDrawable.OVAL)
         setColor(color)
@@ -1134,6 +1253,7 @@ class MainActivity : AppCompatActivity() {
         setSize(dp(18), dp(18))
     }
 
+    // Цвет бренда из networks.json. Некорректный HEX — серый.
     private fun colorOf(hex: String): Int =
         try {
             Color.parseColor(hex)
@@ -1141,10 +1261,13 @@ class MainActivity : AppCompatActivity() {
             Color.GRAY
         }
 
+    // Координаты для показа: 5 знаков после запятой, это около 1 метра.
     private fun coords(p: LatLon): String = String.format(Locale.US, "%.5f, %.5f", p.lat, p.lon)
 
+    // Перевод dp в пиксели по плотности экрана.
     private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
 
+    // Короткие уведомления: версия для строкового ресурса и версия для готового текста.
     private fun toast(resId: Int) {
         Toast.makeText(this, resId, Toast.LENGTH_SHORT).show()
     }
@@ -1155,25 +1278,37 @@ class MainActivity : AppCompatActivity() {
 
     companion object {
         // Центр Минска — стартовая точка, пока нет GPS
+        // Центр Минска — стартовая точка карты, пока нет GPS.
         private const val MINSK_LAT = 53.9045
         private const val MINSK_LON = 27.5615
+        // Радиус загрузки станций вокруг центра карты, км. Решение пользователя (README и этот код): 15 км.
+        // Коммит 5a9e02d ставил 5 км: это расхождение пользователю ещё не подтверждено (см. AGENTS.md).
         private const val SEARCH_RADIUS_KM = 15.0
+        // Пороги перезагрузки станций: RELOAD_DELAY_MS — задержка после движения карты; RELOAD_MOVE_M — на сколько сдвинуть центр;
+        // RELOAD_AGE_MS — через сколько данные считаются старыми; RETRY_AFTER_ERROR_MS — повтор после ошибки. См. loadStations.
         private const val RELOAD_DELAY_MS = 700L
         private const val RELOAD_MOVE_M = 1500.0
         private const val RELOAD_AGE_MS = 10 * 60 * 1000L
         private const val RETRY_AFTER_ERROR_MS = 30 * 1000L
+        // Пороги навигации: REROUTE_MIN_INTERVAL_MS — пауза между перестроениями; ANNOUNCE_M — когда объявлять манёвр;
+        // STOP_ANNOUNCE_M — когда объявлять зарядку по пути.
         private const val REROUTE_MIN_INTERVAL_MS = 15 * 1000L
         private const val ANNOUNCE_M = 300.0
+        // Пороги поворота карты (см. updateHeading): ROTATE_THRESHOLD_DEG — минимальное изменение угла,
+        // MIN_SPEED_FOR_BEARING_MS — минимальная скорость для курса от GPS, MIN_MOVE_FOR_BEARING_M — минимальный путь для курса по точкам.
         private const val ROTATE_THRESHOLD_DEG = 3f
         private const val MIN_SPEED_FOR_BEARING_MS = 1.5f
         private const val MIN_MOVE_FOR_BEARING_M = 8.0
         private const val STRIP_PASSED_TOLERANCE_M = 50.0
         private const val STOP_ANNOUNCE_M = 2000.0
+        // Метка «прибыли» для spokenStepIndex. Int.MAX_VALUE, чтобы не совпасть с номером реального манёвра.
         private const val ARRIVED = Int.MAX_VALUE
 
         // Планирование
+        // Планирование: STATION_PAD_KM — запас вокруг маршрута при поиске станций; RESERVE_M — резерв батареи в конце пути (50 км).
         private const val STATION_PAD_KM = 5.0
         private const val RESERVE_M = 50_000.0
+        // Запас хода по умолчанию 300 км. Допустимые значения в поле: 100..1000 км.
         private const val DEFAULT_RANGE_KM = 300
         private const val MIN_RANGE_KM = 100
         private const val MAX_RANGE_KM = 1000

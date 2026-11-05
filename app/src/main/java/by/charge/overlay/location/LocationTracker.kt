@@ -11,6 +11,7 @@ import android.os.Looper
 /** Тонкая обёртка над LocationManager (GPS + сеть), без Google Play Services. */
 class LocationTracker(context: Context, private val onFix: (Location) -> Unit) : LocationListener {
 
+    // Системный LocationManager. Google Play Services не используются, чтобы приложение работало без них.
     private val lm = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
     private var running = false
 
@@ -18,10 +19,13 @@ class LocationTracker(context: Context, private val onFix: (Location) -> Unit) :
     fun start() {
         if (running) return
         running = true
+        // GPS и сеть подписываются отдельно: если один провайдер выключен или отсутствует, работает второй.
         for (provider in listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)) {
             try {
                 // Сразу отдаём последнюю известную точку, чтобы HUD не ждал первого фикса
                 lm.getLastKnownLocation(provider)?.let(onFix)
+                // Подписка только на включённые провайдеры. MIN_TIME_MS и MIN_DISTANCE_M ограничивают частоту обновлений
+                // (не чаще раза в 3 с и не чаще чем на 10 м), чтобы экономить батарею.
                 if (lm.isProviderEnabled(provider)) {
                     lm.requestLocationUpdates(provider, MIN_TIME_MS, MIN_DISTANCE_M, this, Looper.getMainLooper())
                 }

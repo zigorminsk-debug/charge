@@ -12,10 +12,14 @@ import by.charge.overlay.data.Station
  */
 object RoutePlanner {
 
+    // Максимальное отклонение станции от линии маршрута (3 км). Дальше станция не считается «по пути».
     const val MAX_DETOUR_M = 3000.0
 
+    // Станция на маршруте: alongM — расстояние вдоль маршрута от старта, offM — отклонение от линии (м).
     data class Stop(val station: Station, val alongM: Double, val offM: Double)
 
+    // Бросается, если на каком-то участке в пределах запаса хода нет станции.
+    // MainActivity показывает текст как предупреждение и строит маршрут без остановок.
     class NoStationException(message: String) : Exception(message)
 
     /**
@@ -23,10 +27,12 @@ object RoutePlanner {
      * до которых хватает запаса. Пока финиш в пределах запаса, остановки не нужны.
      */
     fun pickStops(geo: RouteGeometry, stations: List<Station>, rangeM: Double, reserveM: Double): List<Stop> {
+        // Полезный запас хода: диапазон минус резерв (в MainActivity RESERVE_M = 50 км).
         val usable = rangeM - reserveM
         require(usable > 0) { "запас хода должен быть больше страхового остатка" }
         val total = geo.totalM
 
+        // Кандидаты в остановки: без BROKEN и DISUSED, в коридоре маршрута и строго внутри пути (не старт и не финиш).
         val candidates = stations
             .filter { it.status != ChargerStatus.BROKEN && it.status != ChargerStatus.DISUSED }
             .map { s ->
@@ -36,8 +42,11 @@ object RoutePlanner {
             .filter { it.offM <= MAX_DETOUR_M && it.alongM > 0 && it.alongM < total }
             .sortedBy { it.alongM }
 
+        // Жадный алгоритм: из текущей позиции берём самую дальнюю станцию, до которой хватает запаса; повторяем.
+        // Если финиш уже в пределах запаса, остановки не нужны.
         val stops = ArrayList<Stop>()
         var pos = 0.0
+        // Пока финиш дальше полного запаса, нужна ещё одна остановка.
         while (total - pos > usable) {
             val best = candidates
                 .filter { it.alongM > pos && it.alongM <= pos + usable }
@@ -57,9 +66,11 @@ object RoutePlanner {
      * Станции «выведена из эксплуатации» не показываются; «не работает» показываются.
      */
     fun corridor(geo: RouteGeometry, stations: List<Station>): List<Stop> =
+        // Полоса показывает все станции в коридоре, кроме выведенных из эксплуатации. BROKEN остаются видимыми.
         attach(geo, stations.filter { it.status != ChargerStatus.DISUSED })
             .filter { it.offM <= MAX_DETOUR_M && it.alongM > 0 && it.alongM < geo.totalM }
 
+    // Положение станций вдоль уже построенного маршрута. Нужно после перестроения, когда линия изменилась.
     /** Положение станций вдоль уже построенного маршрута (после добавления остановок OSRM). */
     fun attach(geo: RouteGeometry, stations: List<Station>): List<Stop> =
         stations

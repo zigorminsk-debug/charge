@@ -1,3 +1,4 @@
+// Тесты геометрии: расстояние (1° широты ≈ 111 км), нулевое расстояние, азимут на север, восток и юго-запад.
 package by.charge.overlay.geo
 
 import org.junit.Assert.assertEquals

@@ -15,15 +15,21 @@ import org.json.JSONObject
  * Пароль не сохраняется; на сервер OCM он уходит только через его собственную форму входа.
  */
 object OcmAuth {
+    // Хранилище ключа: SharedPreferences «settings», поле ocm_api_key.
+    // Логин и пароль нигде не сохраняются; ключ остаётся на устройстве.
     const val PREFS = "settings"
     const val PREF_KEY = "ocm_api_key"
 
+    // Адреса страниц OCM. Если сайт поменяет адреса входа или списка приложений, менять здесь.
     const val LOGIN_URL = "https://openchargemap.org/loginprovider/beginlogin"
     const val APPS_URL = "https://openchargemap.org/site/profile/applications"
 
+    // Признаки страниц по адресу: страница входа содержит «loginprovider»; список приложений — «/site/profile/applications».
     private const val LOGIN_MARK = "loginprovider"
     private const val APPS_MARK = "/site/profile/applications"
 
+    // Ключ OCM выглядит как GUID (8-4-4-4-12 шестнадцатеричных символов). Это эвристика:
+    // на странице может быть и другой GUID, поэтому пользователь всегда выбирает ключ сам.
     private val GUID = Regex("[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
 
     fun isLoginPage(url: String): Boolean = url.contains(LOGIN_MARK, ignoreCase = true)
@@ -71,7 +77,9 @@ object OcmAuth {
      * Для любых других адресов возвращает null.
      */
     fun httpsUpgrade(url: String): String? {
+    // Возвращает null для всех адресов, кроме http://openchargemap.org: их не трогаем.
         val parsed = url.toHttpUrlOrNull() ?: return null
+        // Некорректный адрес тоже даёт null: лучше ничего не открывать, чем открыть неизвестно что.
         if (parsed.scheme != "http" || parsed.host != "openchargemap.org") return null
         return parsed.newBuilder().scheme("https").build().toString()
     }
@@ -84,6 +92,8 @@ object OcmAuth {
 
     /** Проверка ключа запросом к API. Возвращает null, если ключ принят, иначе текст ошибки. */
     fun checkKey(key: String): String? = try {
+    // Проверка ключа: успешный ответ referencedata означает, что ключ принят.
+    // Ошибка HTTP (например 403) и сетевые ошибки — IOException из Http.get; их текст возвращается пользователю.
         Http.get(validationUrl(key))
         null
     } catch (e: java.io.IOException) {

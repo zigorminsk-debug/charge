@@ -1,3 +1,4 @@
+// Тесты справочника брендов: совпадение по латинице и кириллице, регистр, неизвестные сети, формат цветов.
 package by.charge.overlay.data
 
 import org.junit.Assert.assertEquals

@@ -12,6 +12,8 @@ import java.io.IOException
 import java.util.Collections
 import java.util.concurrent.atomic.AtomicInteger
 
+// Координата в градусах WGS84. Единый тип для маршрута, карты и станций.
+// ВНИМАНИЕ: в OSRM координаты идут в порядке lon,lat — это учитывает Routing.url и parse.
 data class LatLon(val lat: Double, val lon: Double)
 
 /** Манёвр маршрута: где он происходит, что делать и на какой улице. */
@@ -24,6 +26,7 @@ data class Step(
     val durationS: Double,
 )
 
+// Маршрут: геометрия (точки линии), манёвры, длина в метрах и время в секундах (от OSRM).
 data class Route(
     val geometry: List<LatLon>,
     val steps: List<Step>,
@@ -39,10 +42,12 @@ object Routing {
         "https://routing.openstreetmap.de/routed-car/route/v1/driving/",
     )
 
+    // Scope, который не отменяется вместе с вызовом fetch: проигравший запрос доработает сам.
     private val ROUTE_SCOPE = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     /** Адрес запроса: точки по порядку (старт, остановки, финиш) через «;». */
     fun url(base: String, points: List<LatLon>): String {
+        // Точки через «;» в порядке старт → остановки → финиш. Каждая точка: lon,lat.
         val coords = points.joinToString(";") { "${it.lon},${it.lat}" }
         return "$base$coords?overview=full&geometries=geojson&steps=true&alternatives=false"
     }
@@ -50,9 +55,11 @@ object Routing {
     /** Разбор ответа OSRM. Возвращает null, если маршрута нет или он пустой. */
     fun parse(json: String): Route? {
         val root = JSONObject(json)
+        // OSRM отвечает code=Ok при успехе. Для NoRoute и других кодов возвращаем null.
         if (root.optString("code") != "Ok") return null
         val r = root.optJSONArray("routes")?.optJSONObject(0) ?: return null
 
+        // geometry=geojson: координаты приходят как [lon, lat]. Переставляем в LatLon(lat, lon).
         val coords = r.getJSONObject("geometry").getJSONArray("coordinates")
         val geometry = (0 until coords.length()).map { i ->
             val c = coords.getJSONArray(i)
@@ -88,6 +95,7 @@ object Routing {
         )
     }
 
+    // Маршрут от точки A до точки B без остановок.
     suspend fun fetch(from: LatLon, to: LatLon): Route = fetch(listOf(from, to))
 
     /** Запрашивает маршрут через все точки у всех серверов параллельно; первый успешный ответ побеждает. */
@@ -101,6 +109,8 @@ object Routing {
             val host = base.substringAfter("://").substringBefore("/")
             ROUTE_SCOPE.launch {
                 try {
+                    // Запрос и разбор на каждом сервере. Ошибка или пустой маршрут — запись в errors.
+                    // Если все серверы ответили ошибкой, в исключении перечислены причины по каждому.
                     val body = Http.get(url(base, points).toHttpUrl())
                     val route = parse(body) ?: throw IOException("маршрут не найден")
                     winner.complete(route)

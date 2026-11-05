@@ -1,3 +1,4 @@
+// Тесты разбора источников: Overpass (узлы и ways, пропуск элементов без координат), OCM (разъёмы, мощность, статусы), разбор kW, запрос bbox, описание разъёма.
 package by.charge.overlay.data
 
 import org.junit.Assert.assertEquals

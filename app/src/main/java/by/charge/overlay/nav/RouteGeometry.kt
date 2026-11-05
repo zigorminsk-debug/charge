@@ -9,6 +9,7 @@ import kotlin.math.sqrt
  * project() находит ближайшую точку линии к произвольной точке и её положение вдоль маршрута.
  */
 class RouteGeometry(val points: List<LatLon>) {
+// cum[i] — накопленная длина от старта до точки i (м). По ней находится положение проекции вдоль маршрута.
 
     data class Projection(
         /** Расстояние вдоль маршрута от старта до проекции точки, м. */
@@ -34,6 +35,8 @@ class RouteGeometry(val points: List<LatLon>) {
 
     /** Проекция на ближайший отрезок (плоское приближение в окрестности точки — для расстояний до 100 км достаточно). */
     fun project(p: LatLon): Projection {
+        // Плоское приближение: долгота сжимается на cos(широты), поэтому kx и ky переводят градусы в метры.
+        // Для расстояний до 100 км ошибка пренебрежимо мала.
         val kx = METERS_PER_DEG_LAT * cos(Math.toRadians(p.lat))
         val ky = METERS_PER_DEG_LAT
         var best = Projection(0.0, Double.MAX_VALUE)
@@ -45,11 +48,13 @@ class RouteGeometry(val points: List<LatLon>) {
             val dx = (b.lon - a.lon) * kx
             val dy = (b.lat - a.lat) * ky
             val len2 = dx * dx + dy * dy
+            // t — доля отрезка от a до b, где лежит ближайшая к p точка (зажимаем в 0..1, чтобы остаться на отрезке).
             val t = if (len2 == 0.0) 0.0 else ((-ax) * dx + (-ay) * dy) / len2
             val tc = t.coerceIn(0.0, 1.0)
             val px = ax + tc * dx
             val py = ay + tc * dy
             val off = sqrt(px * px + py * py)
+            // Оставляем отрезок с наименьшим отклонением от точки p.
             if (off < best.offM) {
                 best = Projection(cum[i] + tc * (cum[i + 1] - cum[i]), off)
             }

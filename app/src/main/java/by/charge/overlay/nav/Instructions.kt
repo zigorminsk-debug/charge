@@ -5,6 +5,7 @@ import kotlin.math.roundToInt
 
 /** Текст подсказок по-русски из манёвров OSRM. */
 object Instructions {
+    // Перевод модификаторов OSRM (left, slight right, uturn и т.д.) на русский язык.
     private val MODIFIER_RU = mapOf(
         "left" to "налево",
         "right" to "направо",
@@ -16,9 +17,12 @@ object Instructions {
         "uturn" to "развернитесь",
     )
 
+    // Текст подсказки: действие по типу манёвра (type) + направление (modifier) + улица.
+    // Неизвестные типы и модификаторы дают общие фразы, чтобы подсказка никогда не была пустой.
     fun text(step: Step): String {
         val mod = step.modifier
         val ru = mod?.let { MODIFIER_RU[it] }
+        // Тип манёвра из OSRM: depart, arrive, turn, roundabout, fork, merge, ramp, end of road и т.д.
         val base = when (step.type) {
             "depart" -> "Начните движение"
             "arrive" -> "Вы прибыли к цели"
@@ -37,6 +41,7 @@ object Instructions {
             }
             else -> if (ru != null && mod != "straight") "Держитесь: $ru" else "Продолжайте движение"
         }
+        // Название улицы добавляем, если оно известно (для прибытия не нужно).
         return if (step.name.isNotBlank() && step.type != "arrive") "$base на ${step.name}" else base
     }
 

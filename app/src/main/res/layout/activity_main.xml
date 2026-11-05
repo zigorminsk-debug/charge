@@ -1,4 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Главный экран: карта на весь экран; поверх неё верхняя панель со статусом и кнопками, -->
+<!-- полоса станций слева во время навигации, баннер манёвров, панель планирования и карточка станции. -->
+<!-- Все элементы находит MainActivity по id (findViewById). Переименование id ломает код. -->
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"

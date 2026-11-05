@@ -12,9 +12,13 @@ data class Brand(
 
 /** Справочник брендов из assets/networks.json: приводит сырые названия операторов к бренду. */
 class Networks(private val brands: List<Brand>) {
+// Бренды читаются из assets/networks.json (поля id, name, color, aliases).
+// Порядок брендов в файле важен: побеждает первый бренд, чьи aliases нашлись в тексте.
 
     val fallback = Brand(id = "other", name = "Другая сеть", color = "#9E9E9E", aliases = emptyList())
 
+    // Ищет бренд по подстрокам aliases в brand, network, operator и name (без учёта регистра).
+    // Если ничего не нашлось, возвращается fallback («Другая сеть»).
     fun match(vararg texts: String?): Brand {
         val hay = texts.filterNotNull().joinToString(" | ").lowercase()
         if (hay.isBlank()) return fallback
@@ -26,6 +30,7 @@ class Networks(private val brands: List<Brand>) {
     fun labelFor(brand: Brand, operator: String?): String =
         if (brand.id == fallback.id && !operator.isNullOrBlank()) operator else brand.name
 
+    // parse(json) — для тестов; load(context) — читает файл из assets при старте приложения.
     companion object {
         fun parse(json: String): Networks {
             val arr = JSONObject(json).getJSONArray("brands")

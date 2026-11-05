@@ -1,3 +1,4 @@
+// Тесты выбора остановок: жадный выбор по запасу хода, исключение без станций, пропуск BROKEN и DISUSED, коридор маршрута.
 package by.charge.overlay.nav
 
 import by.charge.overlay.data.ChargerStatus

@@ -1,8 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- Интернет: карта OSM, Overpass, OCM, OSRM и Nominatim. -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- Геолокация: GPS и сеть для точки «я» и навигации. -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
 
@@ -14,6 +16,7 @@
         </intent>
     </queries>
 
+    <!-- allowBackup=false: настройки и ключ OCM не попадают в облачную резервную копию Android. -->
     <application
         android:allowBackup="false"
         android:icon="@mipmap/ic_launcher"
@@ -30,6 +33,8 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <!-- Экран входа OCM. exported=false: другие приложения его не запустят. -->
+        <!-- Отдельный экран, потому что там WebView с сайтом OCM, а не карта. -->
 
         <activity
             android:name=".OcmLoginActivity"

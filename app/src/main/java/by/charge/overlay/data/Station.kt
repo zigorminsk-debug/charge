@@ -1,3 +1,6 @@
+// Модель данных зарядной станции.
+// Единый формат для двух источников: OpenStreetMap (Sources.kt, OverpassSource) и Open Charge Map (OpenChargeMapSource).
+// Всё, что выше по слоям (карта, маршрут, полоса), работает только с этими классами.
 package by.charge.overlay.data
 
 /** Статус зарядной станции. Определяется источником; если данных нет — UNKNOWN. */
@@ -15,6 +18,7 @@ data class Outlet(
     val count: Int,
     val status: ChargerStatus,
 ) {
+    // Строка для карточки: «CCS2 · 150 кВт · ×2 · работает». Части без данных пропускаются.
     fun describe(): String {
         val parts = mutableListOf(type)
         if (kw != null) parts.add("${kw.toInt()} кВт")
@@ -40,6 +44,7 @@ data class Station(
     val source: String,
 )
 
+// Первое число в строке (целое или с десятичной точкой / запятой): «50 kW», «120,5 кВт».
 private val KW_REGEX = Regex("""(\d+(?:[.,]\d+)?)""")
 
 /** "50 kW" -> 50.0, "22kW" -> 22.0, "120,5 кВт" -> 120.5, пусто -> null */
