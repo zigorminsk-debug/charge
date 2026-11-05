@@ -89,4 +89,17 @@ class RoutePlannerTest {
         val snap = RouteProgress(route).update(LatLon(0.0, 1.0))
         assertEquals(111_320.0, snap.traveledM, 500.0)
     }
+
+    @Test
+    fun corridorKeepsBrokenAndDropsDisusedAndFar() {
+        val stations = listOf(
+            station("ok", 1.0),
+            station("broken", 1.5, status = ChargerStatus.BROKEN),
+            station("disused", 2.0, status = ChargerStatus.DISUSED),
+            station("far", 1.2, lat = 0.1),
+        )
+        val list = RoutePlanner.corridor(straight, stations)
+        assertEquals(listOf("ok", "broken"), list.map { it.station.id })
+        assertTrue(list[0].alongM < list[1].alongM)
+    }
 }

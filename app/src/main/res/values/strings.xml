@@ -68,4 +68,5 @@
     <string name="stop_ahead">Впереди зарядка: %1$s</string>
     <string name="stop_title">Зарядка по пути</string>
     <string name="strip_finish">Финиш</string>
+    <string name="strip_none">Рядом с маршрутом зарядок впереди нет</string>
 </resources>

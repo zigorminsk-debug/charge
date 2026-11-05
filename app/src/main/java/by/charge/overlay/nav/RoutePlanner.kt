@@ -51,6 +51,15 @@ object RoutePlanner {
         return stops
     }
 
+    /**
+     * Все станции в коридоре маршрута (отклонение до MAX_DETOUR_M), по порядку вдоль пути.
+     * В отличие от pickStops, не выбирает остановки: нужен для полосы «что рядом с маршрутом».
+     * Станции «выведена из эксплуатации» не показываются; «не работает» показываются.
+     */
+    fun corridor(geo: RouteGeometry, stations: List<Station>): List<Stop> =
+        attach(geo, stations.filter { it.status != ChargerStatus.DISUSED })
+            .filter { it.offM <= MAX_DETOUR_M && it.alongM > 0 && it.alongM < geo.totalM }
+
     /** Положение станций вдоль уже построенного маршрута (после добавления остановок OSRM). */
     fun attach(geo: RouteGeometry, stations: List<Station>): List<Stop> =
         stations

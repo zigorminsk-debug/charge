@@ -142,6 +142,10 @@ class MainActivity : AppCompatActivity() {
     private var navigating = false
     private var navDestination: LatLon? = null
     private var navStops: List<RoutePlanner.Stop> = emptyList()
+    // Станции рядом с маршрутом (для полосы) и их положение вдоль текущего маршрута
+    private var navNearby: List<Station> = emptyList()
+    private var navCorridor: List<RoutePlanner.Stop> = emptyList()
+    private var planNearby: List<Station> = emptyList()
     private val announcedStops = HashSet<String>()
     private var routeProgress: RouteProgress? = null
 
@@ -669,6 +673,7 @@ class MainActivity : AppCompatActivity() {
 
                 planRoute = route
                 planStops = stops
+                planNearby = loaded.stations
                 planDestination = to
                 drawRoute(route.geometry)
                 drawStops(stops)
@@ -731,7 +736,7 @@ class MainActivity : AppCompatActivity() {
         val route = planRoute ?: return
         val to = planDestination ?: return
         hidePlanPanel()
-        applyRoute(route, to, planStops)
+        applyRoute(route, to, planStops, planNearby)
     }
 
     private fun clearPlan() {
@@ -739,6 +744,7 @@ class MainActivity : AppCompatActivity() {
         planJob = null
         planRoute = null
         planStops = emptyList()
+        planNearby = emptyList()
         planDestination = null
         planFromPoint = null
         planFromLabel = null
@@ -788,7 +794,7 @@ class MainActivity : AppCompatActivity() {
             return
         }
         hideCard()
-        startRoute(listOf(LatLon(loc.latitude, loc.longitude), to), to, emptyList(), reroute = false)
+        startRoute(listOf(LatLon(loc.latitude, loc.longitude), to), to, emptyList(), null, reroute = false)
     }
 
     /**
@@ -798,29 +804,44 @@ class MainActivity : AppCompatActivity() {
     private fun startRoute(
         points: List<LatLon>,
         to: LatLon,
-        stations: List<Station>,
+        plannedStations: List<Station>,
+        nearby: List<Station>?,
         reroute: Boolean,
     ) {
         routeJob?.cancel()
         if (!reroute) statusText.text = getString(R.string.nav_building)
         routeJob = scope.launch {
-            val route = try {
-                Routing.fetch(points)
+            try {
+                val route = Routing.fetch(points)
+                // Станции рядом с маршрутом нужны полосе. При перестроении берём уже загруженные
+                val near = nearby ?: try {
+                    repo.load(Box.of(route.geometry).padded(STATION_PAD_KM)).stations
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    emptyList()
+                }
+                val planned = RoutePlanner.attach(RouteGeometry(route.geometry), plannedStations)
+                applyRoute(route, to, planned, near)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 if (!reroute) statusText.text = getString(R.string.nav_failed, e.message ?: e.javaClass.simpleName)
-                return@launch
             }
-            val stops = RoutePlanner.attach(RouteGeometry(route.geometry), stations)
-            applyRoute(route, to, stops)
         }
     }
 
-    private fun applyRoute(route: Route, to: LatLon, stops: List<RoutePlanner.Stop>) {
+    private fun applyRoute(
+        route: Route,
+        to: LatLon,
+        stops: List<RoutePlanner.Stop>,
+        nearby: List<Station>,
+    ) {
         routeProgress = RouteProgress(route)
         navDestination = to
         navStops = stops
+        navNearby = nearby
+        navCorridor = RoutePlanner.corridor(RouteGeometry(route.geometry), nearby)
         spokenStepIndex = -1
         drawRoute(route.geometry)
         drawStops(stops)
@@ -858,7 +879,7 @@ class MainActivity : AppCompatActivity() {
             // Пересчёт: от текущей точки через ещё не пройденные зарядки к цели
             val remaining = navStops.filter { it.alongM > snap.traveledM }
             val points = listOf(me) + remaining.map { LatLon(it.station.lat, it.station.lon) } + dest
-            startRoute(points, dest, remaining.map { it.station }, reroute = true)
+            startRoute(points, dest, remaining.map { it.station }, navNearby, reroute = true)
             return
         }
 
@@ -900,6 +921,8 @@ class MainActivity : AppCompatActivity() {
         navigating = false
         navDestination = null
         navStops = emptyList()
+        navNearby = emptyList()
+        navCorridor = emptyList()
         announcedStops.clear()
         routeProgress = null
         headingFix = null
@@ -958,7 +981,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /** Полоса слева: зарядки впереди по маршруту и расстояние до каждой, в конце — финиш. */
+    /** Полоса слева: станции рядом с маршрутом впереди и расстояние до каждой, в конце — финиш. */
     private fun updateStopsStrip(traveledM: Double, remainingM: Double) {
         if (!navigating) {
             stopsStrip.visibility = View.GONE
@@ -966,28 +989,55 @@ class MainActivity : AppCompatActivity() {
         }
         stopsStrip.visibility = View.VISIBLE
         stopsList.removeAllViews()
-        navStops
-            .filter { it.alongM > traveledM + STRIP_PASSED_TOLERANCE_M }
-            .forEach { st ->
-                addStripRow(
-                    distance = Instructions.distance(st.alongM - traveledM),
-                    title = st.station.title,
-                    status = st.station.status.label,
-                    station = st.station,
-                )
-            }
+        val ahead = navCorridor.filter { it.alongM > traveledM + STRIP_PASSED_TOLERANCE_M }
+        if (ahead.isEmpty()) {
+            addStripText(getString(R.string.strip_none))
+        }
+        val plannedIds = navStops.map { it.station.id }.toSet()
+        ahead.forEach { st ->
+            addStripRow(
+                distance = Instructions.distance(st.alongM - traveledM),
+                title = st.station.title,
+                status = st.station.status.label,
+                station = st.station,
+                planned = st.station.id in plannedIds,
+            )
+        }
         addStripRow(
             distance = Instructions.distance(remainingM),
             title = getString(R.string.strip_finish),
             status = null,
             station = null,
+            planned = false,
         )
     }
 
-    private fun addStripRow(distance: String, title: String, status: String?, station: Station?) {
+    private fun addStripText(text: String) {
+        stopsList.addView(
+            TextView(this).apply {
+                this.text = text
+                setTextColor(Color.WHITE)
+                textSize = 12f
+                setPadding(dp(6), dp(6), dp(6), dp(6))
+            },
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply { bottomMargin = dp(8) },
+        )
+    }
+
+    private fun addStripRow(
+        distance: String,
+        title: String,
+        status: String?,
+        station: Station?,
+        planned: Boolean,
+    ) {
         val row = TextView(this).apply {
             text = buildString {
-                append("⚡ ").append(distance).append('\n').append(title)
+                // ★ — остановка, выбранная планировщиком; ⚡ — просто станция рядом с маршрутом
+                append(if (planned) "★ план · " else "⚡ ").append(distance).append('\n').append(title)
                 if (status != null) append('\n').append(status)
             }
             setTextColor(Color.WHITE)
