@@ -44,6 +44,14 @@ jobs:
       - name: Unit tests
         run: gradle --no-daemon test
 
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports-${{ github.sha }}
+          path: app/build/reports/tests/
+          if-no-files-found: ignore
+
       - name: Build signed release APK and AAB
         run: gradle --no-daemon assembleRelease bundleRelease
 

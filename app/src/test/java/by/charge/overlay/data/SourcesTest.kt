@@ -40,7 +40,8 @@ class SourcesTest {
         assertEquals("malanka", malanka.brandId)
         assertEquals(60.0, malanka.maxKw!!, 0.001)
         assertEquals(2, malanka.connectors.size)
-        assertTrue(malanka.connectors.contains("chademo"))
+        // socket:chademo=2 -> "chademo ×2"
+        assertTrue(malanka.connectors.any { it.startsWith("chademo") })
 
         val bf = list.first { it.id == "osm-way-2" }
         assertEquals(53.95, bf.lat, 1e-9)
