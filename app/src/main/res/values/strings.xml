@@ -11,4 +11,14 @@
     <string name="card_close">Закрыть</string>
     <string name="fab_me">Моё местоположение</string>
     <string name="navigator_missing">Яндекс Навигатор не найден</string>
+    <string name="nav_start">Ехать в приложении</string>
+    <string name="nav_stop">Завершить</string>
+    <string name="nav_building">Строим маршрут…</string>
+    <string name="nav_failed">Маршрут не построен: %1$s</string>
+    <string name="nav_arrived">Вы прибыли к цели</string>
+    <string name="nav_reroute">Сошли с маршрута, перестраиваем…</string>
+    <string name="nav_sub">через %1$s · осталось %2$s, %3$s</string>
+    <string name="nav_speak">Через %1$s: %2$s</string>
+    <string name="nav_need_location">Нужна геолокация, чтобы построить маршрут</string>
+    <string name="custom_point">Точка на карте</string>
 </resources>
