@@ -1,0 +1,13 @@
+{
+  "_comment": "Справочник брендов зарядных сетей Беларуси и соседних стран. Совпадение — по подстрокам без учёта регистра в полях operator/brand/network/name из OSM и OpenChargeMap. Цвета условные, нужны только для отличия точек на радаре. Координаты станций сюда НЕ входят — они приходят из открытых баз.",
+  "brands": [
+    {"id": "malanka", "name": "Malanka", "color": "#E53935", "aliases": ["malanka", "маланка", "малинка"]},
+    {"id": "batteryfly", "name": "BatteryFly", "color": "#FB8C00", "aliases": ["batteryfly", "battery fly", "батерфлай", "батарифлай", "батерифлай", "батарфлай"]},
+    {"id": "forevo", "name": "forEVo", "color": "#00ACC1", "aliases": ["forevo", "for evo", "for-evo", "форево", "форэво"]},
+    {"id": "evika", "name": "Evika!", "color": "#7CB342", "aliases": ["evika", "эвика"]},
+    {"id": "zaryadka", "name": "Zaryadka", "color": "#8E24AA", "aliases": ["zaryadka"]},
+    {"id": "bycharge", "name": "byCharge", "color": "#3949AB", "aliases": ["bycharge", "by charge"]},
+    {"id": "gotou", "name": "GO TO-U", "color": "#F4511E", "aliases": ["go to-u", "goto-u", "go to u", "gotou"]},
+    {"id": "tesla", "name": "Tesla", "color": "#90A4AE", "aliases": ["tesla"]}
+  ]
+}
