@@ -10,6 +10,7 @@
         android:layout_height="match_parent" />
 
     <LinearLayout
+        android:id="@+id/top_bar"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_gravity="top"
@@ -98,6 +99,26 @@
                 app:singleSelection="true" />
         </HorizontalScrollView>
     </LinearLayout>
+
+    <!-- Полоса слева во время навигации: зарядки по пути и километраж до них.
+         Верхний отступ выставляется в коде под высоту верхней панели. -->
+    <ScrollView
+        android:id="@+id/stops_strip"
+        android:layout_width="124dp"
+        android:layout_height="match_parent"
+        android:layout_gravity="start|top"
+        android:layout_marginStart="6dp"
+        android:layout_marginBottom="8dp"
+        android:background="#D9121822"
+        android:padding="6dp"
+        android:visibility="gone">
+
+        <LinearLayout
+            android:id="@+id/stops_list"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical" />
+    </ScrollView>
 
     <com.google.android.material.floatingactionbutton.FloatingActionButton
         android:id="@+id/fab_me"

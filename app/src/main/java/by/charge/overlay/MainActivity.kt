@@ -14,6 +14,9 @@ import android.view.View
 import android.view.WindowManager
 import android.widget.Button
 import android.widget.EditText
+import android.widget.FrameLayout
+import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
@@ -28,6 +31,7 @@ import by.charge.overlay.data.StationRepository
 import by.charge.overlay.geo.Box
 import by.charge.overlay.geo.Geo
 import by.charge.overlay.location.LocationTracker
+import by.charge.overlay.nav.Heading
 import by.charge.overlay.nav.Instructions
 import by.charge.overlay.nav.LatLon
 import by.charge.overlay.nav.NavigatorLauncher
@@ -84,6 +88,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var navBanner: View
     private lateinit var navInstruction: TextView
     private lateinit var navSub: TextView
+    private lateinit var topBar: View
+    private lateinit var stopsStrip: View
+    private lateinit var stopsList: LinearLayout
     private lateinit var planPanel: View
     private lateinit var planPickHint: TextView
     private lateinit var planFrom: TextView
@@ -137,6 +144,10 @@ class MainActivity : AppCompatActivity() {
     private var navStops: List<RoutePlanner.Stop> = emptyList()
     private val announcedStops = HashSet<String>()
     private var routeProgress: RouteProgress? = null
+
+    // Поворот карты по движению: последняя точка, от которой считаем направление, и текущий угол карты
+    private var headingFix: LatLon? = null
+    private var mapRotationDeg = 0f
     private var routeLine: Polyline? = null
     private var routeJob: Job? = null
     private var lastRerouteMs = 0L
@@ -171,6 +182,18 @@ class MainActivity : AppCompatActivity() {
         navInstruction = findViewById(R.id.nav_instruction)
         navSub = findViewById(R.id.nav_sub)
         planPanel = findViewById(R.id.plan_panel)
+        topBar = findViewById(R.id.top_bar)
+        stopsStrip = findViewById(R.id.stops_strip)
+        stopsList = findViewById(R.id.stops_list)
+        // Полоса начинается сразу под верхней панелью, какой бы высоты она ни была
+        topBar.addOnLayoutChangeListener { v, _, _, _, _, _, _, _, _ ->
+            val lp = stopsStrip.layoutParams as FrameLayout.LayoutParams
+            val want = v.bottom + dp(4)
+            if (lp.topMargin != want) {
+                lp.topMargin = want
+                stopsStrip.layoutParams = lp
+            }
+        }
         planPickHint = findViewById(R.id.plan_pick_hint)
         planFrom = findViewById(R.id.plan_from)
         planTo = findViewById(R.id.plan_to)
@@ -336,8 +359,9 @@ class MainActivity : AppCompatActivity() {
             scheduleLoad()
         }
         if (navigating) {
-            // Во время навигации карта следует за машиной
+            // Во время навигации карта следует за машиной и поворачивается по движению
             map.controller.setCenter(p)
+            updateHeading(loc)
             updateNavigation(LatLon(loc.latitude, loc.longitude))
         }
         map.invalidate()
@@ -813,6 +837,7 @@ class MainActivity : AppCompatActivity() {
         val progress = routeProgress ?: return
         val snap = progress.update(me)
         val now = SystemClock.elapsedRealtime()
+        updateStopsStrip(snap.traveledM, snap.remainingM)
 
         if (snap.arrived) {
             navInstruction.text = getString(R.string.nav_arrived)
@@ -877,6 +902,11 @@ class MainActivity : AppCompatActivity() {
         navStops = emptyList()
         announcedStops.clear()
         routeProgress = null
+        headingFix = null
+        mapRotationDeg = 0f
+        map.setMapOrientation(0f)
+        stopsList.removeAllViews()
+        stopsStrip.visibility = View.GONE
         routeLine?.let { map.overlays.remove(it) }
         routeLine = null
         map.overlays.removeAll(stopMarkers)
@@ -899,6 +929,83 @@ class MainActivity : AppCompatActivity() {
         map.overlays.add(1, line)
         routeLine = line
         map.invalidate()
+    }
+
+    /**
+     * Поворот карты: направление движения смотрит вверх экрана.
+     * Берём курс от GPS, если он есть и скорость заметная; иначе считаем по двум последним точкам.
+     * Поворот меняем только при заметном изменении угла, чтобы карта не дёргалась.
+     */
+    private fun updateHeading(loc: Location) {
+        val here = LatLon(loc.latitude, loc.longitude)
+        val prev = headingFix
+        val moved = prev?.let { Geo.distanceM(it.lat, it.lon, here.lat, here.lon) } ?: Double.MAX_VALUE
+        val gpsBearing = if (loc.hasBearing() && loc.speed >= MIN_SPEED_FOR_BEARING_MS) loc.bearing.toDouble() else null
+        val bearing = gpsBearing
+            ?: if (prev != null && moved >= MIN_MOVE_FOR_BEARING_M) {
+                Geo.bearingDeg(prev.lat, prev.lon, here.lat, here.lon)
+            } else {
+                null
+            }
+        if (moved >= MIN_MOVE_FOR_BEARING_M) headingFix = here
+        if (bearing == null) return
+
+        // Карта повёрнута на -курс: направление движения оказывается сверху
+        val target = Heading.mapRotation(bearing)
+        if (Heading.angleDelta(target, mapRotationDeg) >= ROTATE_THRESHOLD_DEG) {
+            mapRotationDeg = target
+            map.setMapOrientation(target)
+        }
+    }
+
+    /** Полоса слева: зарядки впереди по маршруту и расстояние до каждой, в конце — финиш. */
+    private fun updateStopsStrip(traveledM: Double, remainingM: Double) {
+        if (!navigating) {
+            stopsStrip.visibility = View.GONE
+            return
+        }
+        stopsStrip.visibility = View.VISIBLE
+        stopsList.removeAllViews()
+        navStops
+            .filter { it.alongM > traveledM + STRIP_PASSED_TOLERANCE_M }
+            .forEach { st ->
+                addStripRow(
+                    distance = Instructions.distance(st.alongM - traveledM),
+                    title = st.station.title,
+                    status = st.station.status.label,
+                    station = st.station,
+                )
+            }
+        addStripRow(
+            distance = Instructions.distance(remainingM),
+            title = getString(R.string.strip_finish),
+            status = null,
+            station = null,
+        )
+    }
+
+    private fun addStripRow(distance: String, title: String, status: String?, station: Station?) {
+        val row = TextView(this).apply {
+            text = buildString {
+                append("⚡ ").append(distance).append('\n').append(title)
+                if (status != null) append('\n').append(status)
+            }
+            setTextColor(Color.WHITE)
+            textSize = 12f
+            setPadding(dp(6), dp(6), dp(6), dp(6))
+            background = GradientDrawable().apply {
+                setColor(Color.argb(60, 255, 255, 255))
+                cornerRadius = dp(8).toFloat()
+            }
+            station?.let { st -> setOnClickListener { showCard(st) } }
+        }
+        stopsList.addView(
+            row,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply { bottomMargin = dp(8) },
+        )
     }
 
     private fun speak(text: String) {
@@ -944,6 +1051,10 @@ class MainActivity : AppCompatActivity() {
         private const val RETRY_AFTER_ERROR_MS = 30 * 1000L
         private const val REROUTE_MIN_INTERVAL_MS = 15 * 1000L
         private const val ANNOUNCE_M = 300.0
+        private const val ROTATE_THRESHOLD_DEG = 3f
+        private const val MIN_SPEED_FOR_BEARING_MS = 1.5f
+        private const val MIN_MOVE_FOR_BEARING_M = 8.0
+        private const val STRIP_PASSED_TOLERANCE_M = 50.0
         private const val STOP_ANNOUNCE_M = 2000.0
         private const val ARRIVED = Int.MAX_VALUE
 

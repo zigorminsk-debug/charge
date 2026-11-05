@@ -67,4 +67,5 @@
     <string name="card_no_outlets">Разъёмы: нет данных</string>
     <string name="stop_ahead">Впереди зарядка: %1$s</string>
     <string name="stop_title">Зарядка по пути</string>
+    <string name="strip_finish">Финиш</string>
 </resources>
