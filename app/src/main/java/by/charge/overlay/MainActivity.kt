@@ -90,6 +90,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var cardTitle: TextView
     private lateinit var cardDetails: TextView
     private lateinit var btnRouteExternal: Button
+    private lateinit var btnToggleStop: Button
     private lateinit var fabMe: FloatingActionButton
     private lateinit var navBanner: View
     private lateinit var navInstruction: TextView
@@ -158,6 +159,9 @@ class MainActivity : AppCompatActivity() {
     // Встроенная навигация
     private var navigating = false
     private var navDestination: LatLon? = null
+    // Текущий маршрут навигации (нужен, чтобы вставить станцию в путь по её положению) и пройденное расстояние
+    private var activeRoute: Route? = null
+    private var traveledM = 0.0
     private var navStops: List<RoutePlanner.Stop> = emptyList()
     // Станции рядом с маршрутом (для полосы) и их положение вдоль текущего маршрута
     private var navNearby: List<Station> = emptyList()
@@ -217,6 +221,7 @@ class MainActivity : AppCompatActivity() {
         cardTitle = findViewById(R.id.card_title)
         cardDetails = findViewById(R.id.card_details)
         btnRouteExternal = findViewById(R.id.btn_route)
+        btnToggleStop = findViewById(R.id.btn_toggle_stop)
         fabMe = findViewById(R.id.fab_me)
         navBanner = findViewById(R.id.nav_banner)
         navInstruction = findViewById(R.id.nav_instruction)
@@ -309,6 +314,8 @@ class MainActivity : AppCompatActivity() {
                 toast(R.string.navigator_missing)
             }
         }
+        // Кнопка «Добавить в маршрут» / «Убрать из маршрута» в карточке станции
+        btnToggleStop.setOnClickListener { cardStation?.let { editStops(it) } }
         findViewById<Button>(R.id.btn_close).setOnClickListener { hideCard() }
         findViewById<Button>(R.id.btn_nav_stop).setOnClickListener { stopNavigation() }
 
@@ -559,6 +566,7 @@ class MainActivity : AppCompatActivity() {
         btnRouteExternal.visibility = View.VISIBLE
         card.visibility = View.VISIBLE
         map.controller.animateTo(GeoPoint(s.lat, s.lon))
+        updateToggleButton(s)
     }
 
     // Карточка точки на карте (долгий тап): только координаты и кнопка «Маршрут». Кнопка Навигатора скрыта: у точки нет станции.
@@ -568,6 +576,7 @@ class MainActivity : AppCompatActivity() {
         cardTitle.text = getString(R.string.custom_point)
         cardDetails.text = coords(p)
         btnRouteExternal.visibility = View.GONE
+        updateToggleButton(null)
         card.visibility = View.VISIBLE
     }
 
@@ -994,6 +1003,7 @@ class MainActivity : AppCompatActivity() {
     ) {
         // Новый маршрут: сбрасываем прогресс, голосовые метки и полосу станций.
         routeProgress = RouteProgress(route)
+        activeRoute = route
         navDestination = to
         navStops = stops
         navNearby = nearby
@@ -1016,6 +1026,7 @@ class MainActivity : AppCompatActivity() {
         // Главная функция навигации: вызывается при каждом обновлении GPS.
         val progress = routeProgress ?: return
         val snap = progress.update(me)
+        traveledM = snap.traveledM
         val now = SystemClock.elapsedRealtime()
         // Полоса станций обновляется при каждом обновлении позиции.
         updateStopsStrip(snap.traveledM, snap.remainingM)
@@ -1092,6 +1103,8 @@ class MainActivity : AppCompatActivity() {
         navCorridor = emptyList()
         announcedStops.clear()
         routeProgress = null
+        activeRoute = null
+        traveledM = 0.0
         headingFix = null
         mapRotationDeg = 0f
         // Карта снова смотрит на север.
@@ -1239,6 +1252,103 @@ class MainActivity : AppCompatActivity() {
     }
 
     // Голос: QUEUE_FLUSH — новая фраза прерывает старую. Важнее свежести подсказки, чем очередь.
+    // ---------- Остановки в маршруте ----------
+
+    /** Остановки текущего режима: во время навигации — навигационные, иначе — планируемые. */
+    private fun currentStops(): List<RoutePlanner.Stop> = if (navigating) navStops else planStops
+
+    /**
+     * Кнопка в карточке: «Добавить в маршрут», если станции нет в маршруте, иначе «Убрать из маршрута».
+     * Скрыта, если маршрута нет или карточка точки на карте (null).
+     */
+    private fun updateToggleButton(s: Station?) {
+        val hasRoute = if (navigating) activeRoute != null else planRoute != null
+        if (s == null || !hasRoute) {
+            btnToggleStop.visibility = View.GONE
+            return
+        }
+        val inRoute = currentStops().any { it.station.id == s.id }
+        btnToggleStop.text = getString(if (inRoute) R.string.stop_remove else R.string.stop_add)
+        btnToggleStop.visibility = View.VISIBLE
+    }
+
+    /**
+     * Добавляет станцию в маршрут или убирает её. Маршрут строится заново через все остановки впереди
+     * в порядке пути. Станцию можно добавить, только если она работает или статус неизвестен,
+     * и только если она рядом с маршрутом и ещё не пройдена.
+     */
+    private fun editStops(station: Station) {
+        val route = (if (navigating) activeRoute else planRoute) ?: run {
+            toast(R.string.stop_need_route)
+            return
+        }
+        val dest = (if (navigating) navDestination else planDestination) ?: return
+        val geo = RouteGeometry(route.geometry)
+        // Позиция, от которой считаем «впереди»: во время навигации — текущая, при планировании — старт
+        val pos = if (navigating) traveledM else 0.0
+        val current = currentStops()
+        val isRemoval = current.any { it.station.id == station.id }
+
+        // Список остановок после изменения, отсортированный по порядку пути
+        val updated: List<RoutePlanner.Stop> = if (isRemoval) {
+            current.filter { it.station.id != station.id }
+        } else {
+            if (station.status == ChargerStatus.BROKEN || station.status == ChargerStatus.DISUSED) {
+                toast(R.string.stop_bad_status)
+                return
+            }
+            val placed = RoutePlanner.attach(geo, listOf(station)).first()
+            if (placed.offM > RoutePlanner.MAX_DETOUR_M) {
+                toast(R.string.stop_too_far)
+                return
+            }
+            if (placed.alongM <= pos) {
+                toast(R.string.stop_behind)
+                return
+            }
+            (current + placed).sortedBy { it.alongM }
+        }
+        val ahead = updated.filter { it.alongM > pos }
+
+        // Проверка запаса хода: самый длинный перегон без зарядки (от старта, между остановками и до финиша)
+        val usableM = rangeKm() * 1000.0 - RESERVE_M
+        val gapM = RoutePlanner.longestGapM(listOf(pos) + ahead.map { it.alongM } + geo.totalM)
+        val warning = if (gapM > usableM) getString(R.string.stop_gap_warning, Instructions.distance(gapM)) else null
+
+        // Точка старта: во время навигации — текущая позиция, при планировании — «Откуда»
+        val me = myLocation?.let { LatLon(it.latitude, it.longitude) }
+        val start = if (navigating) me else (planFromPoint ?: me)
+        if (start == null) {
+            toast(if (navigating) R.string.nav_need_location else R.string.plan_need_from)
+            return
+        }
+
+        routeJob?.cancel()
+        routeJob = scope.launch {
+            try {
+                val points = listOf(start) + ahead.map { LatLon(it.station.lat, it.station.lon) } + dest
+                val newRoute = Routing.fetch(points)
+                val stops = RoutePlanner.attach(RouteGeometry(newRoute.geometry), ahead.map { it.station })
+                if (navigating) {
+                    applyRoute(newRoute, dest, stops, navNearby)
+                    warning?.let { toast(getString(R.string.plan_warning, it)) }
+                } else {
+                    planRoute = newRoute
+                    planStops = stops
+                    drawRoute(newRoute.geometry)
+                    drawStops(stops)
+                    showPlanResult(newRoute, stops, warning, emptyList(), rangeKm())
+                }
+                updateToggleButton(cardStation)
+                toast(if (isRemoval) R.string.stop_removed else R.string.stop_added)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                toast(getString(R.string.stop_edit_failed, e.message ?: e.javaClass.simpleName))
+            }
+        }
+    }
+
     private fun speak(text: String) {
         tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "nav")
     }
