@@ -27,7 +27,14 @@ class StationRepository(
 
     // Результат загрузки: станции и тексты ошибок по источникам.
     // Ошибки показываются в статусной строке, но не отменяют станции, которые удалось получить.
-    data class LoadResult(val stations: List<Station>, val errors: List<String>)
+    // osmCount/ocmCount — сколько станций пришло из каждого источника, matchedCount — сколько станций OCM слились с OSM.
+    data class LoadResult(
+        val stations: List<Station>,
+        val errors: List<String>,
+        val osmCount: Int = 0,
+        val ocmCount: Int = 0,
+        val matchedCount: Int = 0,
+    )
 
     suspend fun load(box: Box): LoadResult = withContext(Dispatchers.IO) {
         val errors = ArrayList<String>()
@@ -65,6 +72,10 @@ class StationRepository(
         LoadResult(
             visible.sortedBy { Geo.distanceM(box.centerLat, box.centerLon, it.lat, it.lon) },
             errors,
+            osmCount = osm.size,
+            ocmCount = ocm.size,
+            // Каждая станция OCM либо слилась с OSM, либо добавила одну строку в список.
+            matchedCount = ocm.size - (merged.size - osm.size),
         )
     }
 
