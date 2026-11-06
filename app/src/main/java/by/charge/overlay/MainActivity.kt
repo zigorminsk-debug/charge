@@ -472,6 +472,10 @@ class MainActivity : AppCompatActivity() {
             val result = repo.load(Box.around(center.lat, center.lon, SEARCH_RADIUS_KM))
             lastLoadOk = result.errors.isEmpty()
             loadErrors = result.errors
+            // Временная диагностика: при введённом ключе показываем, сколько станций пришло из каждого источника.
+            if (!prefs.getString(OcmAuth.PREF_KEY, null).isNullOrBlank()) {
+                toast(getString(R.string.status_sources, result.osmCount, result.ocmCount, result.matchedCount))
+            }
             // При ошибке оставляем уже загруженные станции, а не очищаем карту
             if (lastLoadOk || result.stations.isNotEmpty()) stations = result.stations
             rebuildChips()

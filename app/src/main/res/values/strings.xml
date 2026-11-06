@@ -7,6 +7,7 @@
     <string name="waiting_gps">Ждём GPS…</string>
     <string name="loading">Загрузка станций…</string>
     <string name="status_count">Станций на карте: %1$d</string>
+    <string name="status_sources">Источники: OSM %1$d, OCM %2$d, совпало %3$d</string>
     <string name="load_error">ошибка загрузки: %1$s</string>
     <string name="location_denied">Геолокация не выдана — карта показана на Минске</string>
     <string name="chip_all">Все (%1$d)</string>
