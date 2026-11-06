@@ -41,6 +41,7 @@ import by.charge.overlay.nav.Route
 import by.charge.overlay.nav.RouteGeometry
 import by.charge.overlay.nav.RoutePlanner
 import by.charge.overlay.nav.RouteProgress
+import by.charge.overlay.nav.SpeedZoom
 import by.charge.overlay.nav.Routing
 import by.charge.overlay.util.Permissions
 import com.google.android.material.chip.Chip
@@ -177,6 +178,8 @@ class MainActivity : AppCompatActivity() {
     // Поворот карты по движению: последняя точка, от которой считаем направление, и текущий угол карты
     private var headingFix: LatLon? = null
     private var mapRotationDeg = 0f
+    // Масштаб карты по скорости во время навигации: сглаживает скорость и даёт целевой зум.
+    private val speedZoom = SpeedZoom()
     // Линия маршрута на карте и задача перестроения маршрута (routeJob).
     // lastRerouteMs — антиспам перестроения. spokenStepIndex — номер манёвра, который уже объявлен голосом.
     private var routeLine: Polyline? = null
@@ -433,6 +436,7 @@ class MainActivity : AppCompatActivity() {
             // Во время навигации карта следует за машиной и поворачивается по движению
             map.controller.setCenter(p)
             updateHeading(loc)
+            updateCameraZoom(loc)
             updateNavigation(LatLon(loc.latitude, loc.longitude))
         }
         map.invalidate()
@@ -1018,6 +1022,7 @@ class MainActivity : AppCompatActivity() {
             // Первый запуск навигации: показываем баннер и не даём экрану гаснуть.
             navigating = true
             setCarMode(true)
+            speedZoom.reset()
             navBanner.visibility = View.VISIBLE
             window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         }
@@ -1104,6 +1109,7 @@ class MainActivity : AppCompatActivity() {
         // Выход из навигации: сбрасываем всё, что относилось к маршруту, и возвращаем карту «север вверх».
         navigating = false
         setCarMode(false)
+        speedZoom.reset()
         navDestination = null
         navStops = emptyList()
         navNearby = emptyList()
@@ -1173,6 +1179,17 @@ class MainActivity : AppCompatActivity() {
         if (Heading.angleDelta(target, mapRotationDeg) >= ROTATE_THRESHOLD_DEG) {
             mapRotationDeg = target
             map.setMapOrientation(target)
+        }
+    }
+
+    /**
+     * Масштаб по скорости: медленно — ближе, на трассе — дальше. Зум меняем плавной анимацией
+     * и только при заметной разнице (SpeedZoom.MIN_CHANGE), чтобы карта не дёргалась.
+     */
+    private fun updateCameraZoom(loc: Location) {
+        val target = speedZoom.target(if (loc.hasSpeed()) loc.speed.toDouble() else 0.0)
+        if (SpeedZoom.shouldChange(map.zoomLevelDouble, target)) {
+            map.controller.zoomTo(target, SpeedZoom.ANIM_MS)
         }
     }
 
