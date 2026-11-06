@@ -108,7 +108,8 @@ gradle --no-daemon assembleRelease
 app/src/main/java/by/charge/overlay/
   MainActivity.kt             карта osmdroid, метки, фильтр по сетям, карточка, навигация (баннер, голос)
   data/Sources.kt             OSM (Overpass) и Open Charge Map (с ключом): запросы, разъёмы, статусы
-  data/StationRepository.kt   загрузка из источников, склейка дублей, ошибки по каждому зеркалу
+  data/StationRepository.kt   загрузка из источников, ошибки по каждому зеркалу
+  data/StationMerge.kt       склейка OSM и OCM в одну станцию (радиусы 50 и 100 м, статусы из OCM)
   data/Networks.kt            нормализация названий операторов по справочнику брендов
   geo/Geo.kt                  расстояние и азимут
   location/LocationTracker.kt геолокация через LocationManager (без Google Play Services)

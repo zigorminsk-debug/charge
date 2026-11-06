@@ -42,6 +42,8 @@ data class Station(
     val outlets: List<Outlet>,
     val status: ChargerStatus,
     val source: String,
+    /** ID точки в Open Charge Map, если станция есть в OCM (для карточки и проверки на сайте). */
+    val ocmId: Int? = null,
 )
 
 // Первое число в строке (целое или с десятичной точкой / запятой): «50 kW», «120,5 кВт».
