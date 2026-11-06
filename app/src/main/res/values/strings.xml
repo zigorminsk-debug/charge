@@ -71,6 +71,16 @@
     <string name="stop_ahead">Впереди зарядка: %1$s</string>
     <string name="stop_title">Зарядка по пути</string>
     <string name="strip_finish">Финиш</string>
+    <string name="stop_add">Добавить в маршрут</string>
+    <string name="stop_remove">Убрать из маршрута</string>
+    <string name="stop_need_route">Сначала постройте маршрут</string>
+    <string name="stop_too_far">Станция дальше 3 км от маршрута</string>
+    <string name="stop_behind">Эта станция уже позади</string>
+    <string name="stop_bad_status">Не добавляем станцию, которая не работает или выведена из эксплуатации</string>
+    <string name="stop_gap_warning">Перегон без зарядки %1$s — это больше запаса хода</string>
+    <string name="stop_added">Остановка добавлена, маршрут перестроен</string>
+    <string name="stop_removed">Остановка убрана, маршрут перестроен</string>
+    <string name="stop_edit_failed">Не удалось перестроить маршрут: %1$s</string>
     <string name="strip_none">Рядом с маршрутом зарядок впереди нет</string>
     <string name="settings_button">Ключ OCM</string>
     <string name="ocm_title">Вход в Open Charge Map</string>

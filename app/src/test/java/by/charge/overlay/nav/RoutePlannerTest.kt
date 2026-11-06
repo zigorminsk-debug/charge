@@ -31,6 +31,12 @@ class RoutePlannerTest {
     }
 
     @Test
+    fun longestGapIsBetweenNeighbours() {
+        // Перегоны: 80, 120 и 50 км; самый длинный — 120 км
+        assertEquals(120_000.0, RoutePlanner.longestGapM(listOf(0.0, 80_000.0, 200_000.0, 250_000.0)), 0.001)
+    }
+
+    @Test
     fun noStopsWhenRangeIsEnough() {
         val stops = RoutePlanner.pickStops(straight, listOf(station("a", 1.0)), 400_000.0, 50_000.0)
         assertTrue(stops.isEmpty())

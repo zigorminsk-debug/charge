@@ -70,7 +70,13 @@ object RoutePlanner {
         attach(geo, stations.filter { it.status != ChargerStatus.DISUSED })
             .filter { it.offM <= MAX_DETOUR_M && it.alongM > 0 && it.alongM < geo.totalM }
 
-    // Положение станций вдоль уже построенного маршрута. Нужно после перестроения, когда линия изменилась.
+    /**
+     * Самый длинный перегон между соседними точками (м). positions — расстояния вдоль маршрута по возрастанию,
+     * включая старт и финиш. Нужен, чтобы проверить, хватает ли запаса хода между остановками.
+     */
+    fun longestGapM(positions: List<Double>): Double =
+        positions.zipWithNext { a, b -> b - a }.maxOrNull() ?: 0.0
+
     /** Положение станций вдоль уже построенного маршрута (после добавления остановок OSRM). */
     fun attach(geo: RouteGeometry, stations: List<Station>): List<Stop> =
         stations

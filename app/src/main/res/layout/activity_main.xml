@@ -325,6 +325,14 @@
                 android:text="@string/route_button" />
 
             <Button
+                android:id="@+id/btn_toggle_stop"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:visibility="gone"
+                android:text="@string/stop_add" />
+
+            <Button
                 android:id="@+id/btn_close"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
