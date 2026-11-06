@@ -84,6 +84,18 @@ class NavigationTest {
     }
 
     @Test
+    fun carIsSnappedOntoRouteLine() {
+        // Прямая вдоль экватора от 0 до 0.01° долготы; машина на 0.0003° севернее линии
+        val straight = Route(
+            geometry = listOf(LatLon(0.0, 0.0), LatLon(0.0, 0.01)),
+            steps = emptyList(), distanceM = 1113.0, durationS = 90.0,
+        )
+        val snap = RouteProgress(straight).update(LatLon(0.0003, 0.005))
+        assertEquals(0.0, snap.snapped.lat, 1e-9)
+        assertEquals(0.005, snap.snapped.lon, 1e-9)
+    }
+
+    @Test
     fun progressDetectsArrival() {
         val snap = RouteProgress(route).update(LatLon(0.0, 0.0029))
         assertTrue(snap.arrived)
