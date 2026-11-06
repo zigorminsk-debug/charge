@@ -1202,7 +1202,10 @@ class MainActivity : AppCompatActivity() {
         stopsStrip.visibility = View.VISIBLE
         stopsList.removeAllViews()
         // Впереди — станции полосы, которые ещё не проехали. Станции ближе STRIP_PASSED_TOLERANCE_M считаем пройденными.
-        val ahead = navCorridor.filter { it.alongM > traveledM + STRIP_PASSED_TOLERANCE_M }
+        // Строки сортируем по тому же расстоянию, что показываем: станция в 50 м не должна стоять под станцией в 2 км.
+        val ahead = navCorridor
+            .filter { it.alongM > traveledM + STRIP_PASSED_TOLERANCE_M }
+            .sortedBy { stripDistanceM(it, traveledM) }
         // Если впереди станций нет, пишем явный текст, а не оставляем полосу пустой.
         if (ahead.isEmpty()) {
             addStripText(getString(R.string.strip_none))
@@ -1211,7 +1214,7 @@ class MainActivity : AppCompatActivity() {
         val plannedIds = navStops.map { it.station.id }.toSet()
         ahead.forEach { st ->
             addStripRow(
-                distance = Instructions.distance(st.alongM - traveledM),
+                distance = Instructions.distance(stripDistanceM(st, traveledM)),
                 title = st.station.title,
                 status = st.station.status.label,
                 station = st.station,
@@ -1226,6 +1229,16 @@ class MainActivity : AppCompatActivity() {
             station = null,
             planned = false,
         )
+    }
+
+    /**
+     * Расстояние до станции для полосы: прямая от текущей GPS-позиции, та же величина, что в карточке станции.
+     * Расстояние вдоль маршрута нельзя показывать: станция может стоять до MAX_DETOUR_M от дороги,
+     * и тогда она выглядит «рядом», хотя до неё далеко. Без GPS берём расстояние вдоль маршрута.
+     */
+    private fun stripDistanceM(st: RoutePlanner.Stop, traveledM: Double): Double {
+        val loc = myLocation ?: return st.alongM - traveledM
+        return Geo.distanceM(loc.latitude, loc.longitude, st.station.lat, st.station.lon)
     }
 
     private fun addStripText(text: String) {
