@@ -22,6 +22,7 @@ import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import by.charge.overlay.data.ChargerStatus
 import by.charge.overlay.data.Geocoder
 import by.charge.overlay.data.Networks
@@ -419,7 +420,8 @@ class MainActivity : AppCompatActivity() {
             map.overlays.add(marker)
             meMarker = marker
         }
-        marker.position = p
+        // Во время навигации позицию задаёт updateNavigation: машина стоит на линии маршрута
+        if (!navigating) marker.position = p
         // При первом фиксе центрируем карту на себе и загружаем станции вокруг.
         if (firstFix) {
             firstFix = false
@@ -1015,6 +1017,7 @@ class MainActivity : AppCompatActivity() {
         if (!navigating) {
             // Первый запуск навигации: показываем баннер и не даём экрану гаснуть.
             navigating = true
+            setCarMode(true)
             navBanner.visibility = View.VISIBLE
             window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         }
@@ -1026,6 +1029,9 @@ class MainActivity : AppCompatActivity() {
         // Главная функция навигации: вызывается при каждом обновлении GPS.
         val progress = routeProgress ?: return
         val snap = progress.update(me)
+        // Машина на линии маршрута. Если сошли с маршрута, показываем реальную позицию, а не привязанную
+        val carAt = if (snap.offRouteM > RouteProgress.OFF_ROUTE_M) me else snap.snapped
+        meMarker?.position = GeoPoint(carAt.lat, carAt.lon)
         traveledM = snap.traveledM
         val now = SystemClock.elapsedRealtime()
         // Полоса станций обновляется при каждом обновлении позиции.
@@ -1097,6 +1103,7 @@ class MainActivity : AppCompatActivity() {
         routeJob = null
         // Выход из навигации: сбрасываем всё, что относилось к маршруту, и возвращаем карту «север вверх».
         navigating = false
+        setCarMode(false)
         navDestination = null
         navStops = emptyList()
         navNearby = emptyList()
@@ -1347,6 +1354,23 @@ class MainActivity : AppCompatActivity() {
                 toast(getString(R.string.stop_edit_failed, e.message ?: e.javaClass.simpleName))
             }
         }
+    }
+
+    /**
+     * Значок «я» на карте: во время навигации — машина, иначе — синяя точка.
+     * Маркер обычный (не flat), поэтому на экране значок всегда стоит прямо, а карта повёрнута по движению.
+     */
+    private fun setCarMode(on: Boolean) {
+        val m = meMarker ?: return
+        m.icon = if (on) {
+            ContextCompat.getDrawable(this, R.drawable.ic_car_marker)
+        } else {
+            dot(Color.rgb(64, 160, 255), Color.WHITE)
+        }
+        m.setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+        // При выходе возвращаем точку на последнюю известную позицию GPS, пока не пришёл новый фикс
+        if (!on) myLocation?.let { m.position = GeoPoint(it.latitude, it.longitude) }
+        map.invalidate()
     }
 
     private fun speak(text: String) {
