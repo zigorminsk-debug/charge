@@ -234,6 +234,7 @@ object OpenChargeMapSource {
                     outlets = outlets,
                     status = status,
                     source = SOURCE,
+                    ocmId = p.optInt("ID"),
                 )
             )
         }

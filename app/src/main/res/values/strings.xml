@@ -65,6 +65,9 @@
     <string name="settings_save">Сохранить</string>
     <string name="settings_saved">Сохранено. Станции обновятся.</string>
     <string name="card_status">Статус: %1$s</string>
+    <string name="card_source_osm">Источник: OpenStreetMap</string>
+    <string name="card_source_ocm">Источник: Open Charge Map, ID %1$d</string>
+    <string name="card_source_both">Источник: OpenStreetMap и Open Charge Map, ID %1$d</string>
     <string name="card_max_kw">Мощность до %1$d кВт</string>
     <string name="card_outlets">Разъёмы:</string>
     <string name="card_no_outlets">Разъёмы: нет данных</string>

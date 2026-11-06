@@ -58,25 +58,8 @@ class StationRepository(
             }
         }
 
-        // Станция из OCM, совпадающая с OSM в пределах 50 м, считается дублем.
-        // Статус берём из OCM, если он там есть: это единственный источник статусов.
-        val merged = ArrayList<Station>(osm)
-        for (s in ocm) {
-            // Слияние: станция OCM в пределах 50 м от станции OSM считается той же станцией.
-            // Тогда берём разъёмы и мощность OSM (если есть), а статус — из OCM (OCM — основной источник статусов).
-            // Станции OCM без двойника добавляются как есть.
-            val twin = osm.firstOrNull { Geo.distanceM(it.lat, it.lon, s.lat, s.lon) < 50.0 }
-            if (twin == null) {
-                merged.add(s)
-            } else {
-                val index = merged.indexOf(twin)
-                merged[index] = twin.copy(
-                    outlets = if (twin.outlets.isEmpty()) s.outlets else twin.outlets,
-                    status = if (s.status != ChargerStatus.UNKNOWN) s.status else twin.status,
-                    maxKw = twin.maxKw ?: s.maxKw,
-                )
-            }
-        }
+        // Слияние станций OSM и OCM (правила в StationMerge). Статус и разъёмы берутся из OCM, если они там есть.
+        val merged = StationMerge.merge(osm, ocm)
         // Станции «выведена из эксплуатации» не показываем ни на карте, ни в маршрутах.
         val visible = merged.filter { it.status != ChargerStatus.DISUSED }
         LoadResult(

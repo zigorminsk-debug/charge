@@ -556,6 +556,8 @@ class MainActivity : AppCompatActivity() {
         // Заголовок: бренд и оператор (оператор показываем, только если он отличается от бренда).
         val header = listOfNotNull(s.brandName, s.operator?.takeIf { it != s.brandName }).joinToString(" · ")
         lines.add(header)
+        // Источник данных и ID в OCM: по ID можно открыть точку на сайте и проверить статус.
+        lines.add(sourceText(s))
         // Расстояние от моей позиции. Без GPS эта строка не выводится.
         myLocation?.let { loc ->
             lines.add(Instructions.distance(Geo.distanceM(loc.latitude, loc.longitude, s.lat, s.lon)))
@@ -573,6 +575,17 @@ class MainActivity : AppCompatActivity() {
         card.visibility = View.VISIBLE
         map.controller.animateTo(GeoPoint(s.lat, s.lon))
         updateToggleButton(s)
+    }
+
+    /** Строка «Источник» в карточке: OSM, OCM или оба источника (станция слита по совпадению). */
+    private fun sourceText(s: Station): String {
+        val ocmId = s.ocmId
+        return when {
+            // Станция из OCM без двойника: source = "ocm". Слитая станция сохраняет source = "osm" и получает ocmId.
+            s.source == "ocm" && ocmId != null -> getString(R.string.card_source_ocm, ocmId)
+            ocmId != null -> getString(R.string.card_source_both, ocmId)
+            else -> getString(R.string.card_source_osm)
+        }
     }
 
     // Карточка точки на карте (долгий тап): только координаты и кнопка «Маршрут». Кнопка Навигатора скрыта: у точки нет станции.
